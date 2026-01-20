@@ -112,19 +112,12 @@ async function initDatabase() {
 // Initialisation des bots avec configuration optimisée
 const mainBot = new TelegramBot(MAIN_BOT_TOKEN, {
     polling: {
-        interval: 2000,
+        interval: 1000,
         autoStart: true,
         params: {
-            timeout: 60,
-            limit: 50
-        }
-    },
-    request: {
-        timeout: 60000,
-        agentOptions: {
-            keepAlive: true,
-            family: 4
-        }
+            timeout: 30,
+            limit: 100
+    }
     }
 });
 
