@@ -1,0 +1,359 @@
+{
+  "userWallets": {
+    "5798607712": [
+      {
+        "publicKey": "A35mbMb4JBsYpS1eeD2na4JkVGt4QD5TwiViB96EdVkR",
+        "privateKey": "3hrZKVwr68R6KcTcQ9QWSqRz1qXQYKTN3ixvzDRCL5e5ukthcz9496QabWN7XKwoxiRemHs2MdhKogH6RsVYCunm",
+        "isDefault": true,
+        "name": "Wallet 1",
+        "balance": 0.000900026
+      }
+    ]
+  },
+  "userStates": {
+    "5798607712": {
+      "username": "@Julien0853",
+      "tradingMenuMessageId": 1470,
+      "referralMenuMessageId": 1430,
+      "autotradeMenuMessageId": 1456,
+      "autotradeResultMessageId": 1444,
+      "autotradeMessageId": 1459,
+      "walletMenuMessageId": 1467,
+      "adminMenuMessageId": 1477,
+      "adminAction": "awaiting_user_id"
+    },
+    "7673698655": {
+      "username": "@PhotonV2_support",
+      "mainMenuMessageId": 1428,
+      "accessGrantedMessageId": 1432,
+      "tradingMenuMessageId": 1433
+    }
+  },
+  "userSettings": {
+    "5798607712": {
+      "slippage": "1%",
+      "gasPriority": "Medium",
+      "theme": "Dark",
+      "notifications": true,
+      "hasVisitedTradingMenu": false,
+      "language": "en"
+    },
+    "7673698655": {
+      "slippage": "1%",
+      "gasPriority": "Medium",
+      "theme": "Dark",
+      "notifications": true,
+      "hasVisitedTradingMenu": false,
+      "language": "en"
+    }
+  },
+  "referralCodes": {},
+  "connectedUsers": [
+    5798607712,
+    7673698655
+  ],
+  "autotradeSessions": {
+    "5798607712": {
+      "userId": 5798607712,
+      "mode": "NORMAL",
+      "initialAmount": 1,
+      "currentAmount": 3.041757693673185,
+      "startTime": 1768936126646,
+      "trades": [
+        {
+          "type": "buy",
+          "positionId": 1768936129426.3157,
+          "token": {
+            "name": "Popcat",
+            "symbol": "POPCAT",
+            "address": "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
+            "volatility": 0.13
+          },
+          "amount": 0.3333333333333333,
+          "price": 0.0759132,
+          "realPrice": 0.07668,
+          "timestamp": 1768936129426
+        },
+        {
+          "type": "buy",
+          "positionId": 1768936162948.7073,
+          "token": {
+            "name": "Jito",
+            "symbol": "JTO",
+            "address": "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",
+            "volatility": 0.08
+          },
+          "amount": 0.3333333333333333,
+          "price": 0.3563726278282479,
+          "realPrice": 0.3364,
+          "timestamp": 1768936162948
+        },
+        {
+          "type": "buy",
+          "positionId": 1768936163798.1929,
+          "token": {
+            "name": "Bonk",
+            "symbol": "BONK",
+            "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+            "volatility": 0.1
+          },
+          "amount": 0.3333333333333333,
+          "price": 0.000009682815002993409,
+          "realPrice": 0.000008969,
+          "timestamp": 1768936163798
+        },
+        {
+          "type": "sell",
+          "positionId": 1768936129426.3157,
+          "token": {
+            "name": "Popcat",
+            "symbol": "POPCAT",
+            "address": "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
+            "volatility": 0.13
+          },
+          "amount": 0.3333333333333333,
+          "buyPrice": 0.0759132,
+          "sellPrice": 2.2047271049071018,
+          "realBuyPrice": 0.07651,
+          "profit": 0.816045330214389,
+          "pnl": 2804.273703265179,
+          "reason": "profit",
+          "timestamp": 1768936562251
+        },
+        {
+          "type": "sell",
+          "positionId": 1768936162948.7073,
+          "token": {
+            "name": "Jito",
+            "symbol": "JTO",
+            "address": "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",
+            "volatility": 0.08
+          },
+          "amount": 0.3333333333333333,
+          "buyPrice": 0.3563726278282479,
+          "sellPrice": 2.229289455597627,
+          "realBuyPrice": 0.3364,
+          "profit": 0.7179514506449285,
+          "pnl": 525.5501353128675,
+          "reason": "profit",
+          "timestamp": 1768936562254
+        },
+        {
+          "type": "sell",
+          "positionId": 1768936163798.1929,
+          "token": {
+            "name": "Bonk",
+            "symbol": "BONK",
+            "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+            "volatility": 0.1
+          },
+          "amount": 0.3333333333333333,
+          "buyPrice": 0.000009682815002993409,
+          "sellPrice": 2.1941684499923433,
+          "realBuyPrice": 0.000008934,
+          "profit": 0.8410941940846469,
+          "pnl": 22660339.6481191,
+          "reason": "profit",
+          "timestamp": 1768936562255
+        },
+        {
+          "type": "buy",
+          "positionId": 1768936563177.013,
+          "token": {
+            "name": "Wen",
+            "symbol": "WEN",
+            "address": "WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk",
+            "volatility": 0.09
+          },
+          "amount": 0.3333333333333333,
+          "price": 0.0000076824,
+          "realPrice": 0.00000776,
+          "timestamp": 1768936563177
+        },
+        {
+          "type": "buy",
+          "positionId": 1768936563532.9578,
+          "token": {
+            "name": "Jupiter",
+            "symbol": "JUP",
+            "address": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+            "volatility": 0.07
+          },
+          "amount": 0.3333333333333333,
+          "price": 0.19914998138077064,
+          "realPrice": 0.1915,
+          "timestamp": 1768936563532
+        }
+      ],
+      "active": false,
+      "progress": 100
+    }
+  },
+  "userBalances": {
+    "5798607712": 3.22486978606693,
+    "7673698655": 0.01
+  },
+  "adminBalances": {},
+  "withdrawalRequests": {},
+  "tradeHistory": {
+    "5798607712": [
+      {
+        "userId": 5798607712,
+        "mode": "NORMAL",
+        "initialAmount": 0.5,
+        "finalAmount": 1.365131388597526,
+        "profit": 0.865131388597526,
+        "profitPercentage": 173.0262777195052,
+        "trades": 10,
+        "winRate": 100,
+        "duration": 2399082,
+        "timestamp": 1768869791829,
+        "bestTrade": {
+          "token": "BOME",
+          "profit": 0.29080454651051424,
+          "pnl": 676905.6423385009,
+          "buyPrice": 0.00023433201293022484,
+          "sellPrice": 1.5864409493430078,
+          "duration": 454083
+        }
+      },
+      {
+        "userId": 5798607712,
+        "mode": "SAFE",
+        "initialAmount": 0.5,
+        "finalAmount": 1.447219722576116,
+        "profit": 0.9472197225761161,
+        "profitPercentage": 189.44394451522322,
+        "trades": 6,
+        "winRate": 100,
+        "duration": 920938,
+        "timestamp": 1768871649139,
+        "bestTrade": {
+          "token": "WIF",
+          "profit": 0.47363394575991785,
+          "pnl": 780002.8999418895,
+          "buyPrice": 0.00022080754538696004,
+          "sellPrice": 1.722526064854179,
+          "duration": 457058
+        }
+      }
+    ]
+  },
+  "bestTrades": {
+    "5798607712": [
+      {
+        "token": "POPCAT",
+        "profit": 1.0105217409483156,
+        "pnl": 4119550.212099521,
+        "buyPrice": 0.00006399105572973654,
+        "sellPrice": 2.6362076630948144,
+        "duration": 459009,
+        "mode": "NORMAL",
+        "timestamp": 1768924479206
+      },
+      {
+        "token": "BONK",
+        "profit": 0.8410941940846469,
+        "pnl": 22660339.6481191,
+        "buyPrice": 0.000009682815002993409,
+        "sellPrice": 2.1941684499923433,
+        "duration": 398457,
+        "mode": "NORMAL",
+        "timestamp": 1768936562255
+      },
+      {
+        "token": "POPCAT",
+        "profit": 0.8227741725415039,
+        "pnl": 2555.4839865712747,
+        "buyPrice": 0.08399064200397588,
+        "sellPrice": 2.230358048633986,
+        "duration": 399376,
+        "mode": "NORMAL",
+        "timestamp": 1768929994986
+      },
+      {
+        "token": "POPCAT",
+        "profit": 0.816045330214389,
+        "pnl": 2804.273703265179,
+        "buyPrice": 0.0759132,
+        "sellPrice": 2.2047271049071018,
+        "duration": 432826,
+        "mode": "NORMAL",
+        "timestamp": 1768936562252
+      },
+      {
+        "token": "JTO",
+        "profit": 0.8098960256009262,
+        "pnl": 1210628.576877424,
+        "buyPrice": 0.00011634574418894274,
+        "sellPrice": 1.4086311728762346,
+        "duration": 458293,
+        "mode": "SAFE",
+        "timestamp": 1768927298195
+      },
+      {
+        "token": "WIF",
+        "profit": 0.807603716297018,
+        "pnl": 1938647.94723225,
+        "buyPrice": 0.00007244885304012452,
+        "sellPrice": 1.4046006511087237,
+        "duration": 460803,
+        "mode": "SAFE",
+        "timestamp": 1768927298193
+      },
+      {
+        "token": "JUP",
+        "profit": 0.7702584632286897,
+        "pnl": 994.3358853454495,
+        "buyPrice": 0.2020816037808746,
+        "sellPrice": 2.2114515078557178,
+        "duration": 428765,
+        "mode": "NORMAL",
+        "timestamp": 1768929994985
+      },
+      {
+        "token": "WIF",
+        "profit": 0.7219271854047308,
+        "pnl": 546.6412137906282,
+        "buyPrice": 0.34452,
+        "sellPrice": 2.227808309751472,
+        "duration": 428637,
+        "mode": "NORMAL",
+        "timestamp": 1768882420380
+      },
+      {
+        "token": "WIF",
+        "profit": 0.47363394575991785,
+        "pnl": 780002.8999418895,
+        "buyPrice": 0.00022080754538696004,
+        "sellPrice": 1.722526064854179,
+        "duration": 457058,
+        "mode": "SAFE",
+        "timestamp": 1768871187016
+      },
+      {
+        "token": "POPCAT",
+        "profit": 0.47358354166329336,
+        "pnl": 1060235.0867778335,
+        "buyPrice": 0.00016242831341475535,
+        "sellPrice": 1.7222843979981177,
+        "duration": 459058,
+        "mode": "SAFE",
+        "timestamp": 1768871187014
+      }
+    ]
+  },
+  "userLimits": {
+    "5798607712": {
+      "dailySessions": 2,
+      "lastSessionDate": "Tue Jan 20 2026",
+      "dailyLimit": 3
+    },
+    "7673698655": {
+      "dailySessions": 0,
+      "lastSessionDate": "Tue Jan 20 2026",
+      "dailyLimit": 3
+    }
+  },
+  "referralBonuses": {}
+}

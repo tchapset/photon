@@ -1,0 +1,50 @@
+
+> crypto-trading-bot-solana@1.0.0 start
+> node bot.js
+
+✅ Solana Web3 initialisé
+💰 Adresse Wallet: 452jVRhbvgJHkoP5HPitbMHsiYNbmCjxm5VhukhUFAPN
+🚀 **COVESTING TRADING BOT LANCÉ**
+✅ Port : 3000
+✅ PostgreSQL : ✅ Connecté
+✅ Token : Configuré
+✅ Admin : 5798607712
+✅ NowPayments : ✅ Configuré
+✅ Webhook : ✅ Configuré
+✅ Solana : ✅ Configuré
+✅ Système d'achat direct : ✅ Activé
+✅ Plans : 8 disponibles
+✅ Retraits : ✅ Activés
+✅ Support : @covesting_support
+✅ Communauté : https://t.me/covesting_community
+✅ Mises à jour prix : ✅ Activées (SOL/USDT)
+✅ Dépôts minimum : $10 USD
+✅ Parrainages requis : 3 (au lieu de 5)
+✅ Plans multiples : ✅ Activés
+✅ Notifications : ✅ Activées
+✅ Format HTML : ✅ Activé
+📊 Prix SOL mis à jour: $126.7300
+🤖 **Prêt à générer des profits avec COVESTING !**
+✅ Bot connecté : @drgdtghbot (8564615150)
+❌ Erreur connexion Telegram : Assignment to constant variable.
+✅ PostgreSQL connecté avec succès: 2026-01-01T23:57:43.016Z
+✅ Base de données PostgreSQL initialisée
+📨 Webhook NowPayments reçu: {
+  "invoice_id": "real_test_invoice_1767311886076",
+  "order_id": "real_test_order_1767311886076",
+  "payment_status": "confirmed",
+  "pay_amount": "0.05",
+  "outcome_amount": "0.05",
+  "payment_id": "real_test_payment_1767311886076",
+  "price_amount": "7.5",
+  "price_currency": "usd",
+  "pay_currency": "sol",
+  "created_at": "2026-01-01T23:58:06.533Z",
+  "updated_at": "2026-01-01T23:58:06.533Z",
+  "order_description": "Test payment for Discovery plan"
+}
+✅ Paiement 4 confirmé, activation du plan...
+✅ Plan Découverte 150% activé pour utilisateur 5798607712
+📨 Notifications motivationnelles envoyées à 1 utilisateurs
+📊 Prix SOL mis à jour: $126.8100
+📊 Prix SOL mis à jour: $126.7300

