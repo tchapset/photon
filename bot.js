@@ -10,7 +10,7 @@ const { Client } = require('pg');
 
 // Configuration
 const SOLANA_RPC = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
-const MAIN_BOT_TOKEN = process.env.MAIN_BOT_TOKEN || "8564615150:AAGIObXe4jZxEK5ZpOYw5x0jnhCDnpt6nVU";
+const MAIN_BOT_TOKEN = process.env.MAIN_BOT_TOKEN || "8490920095:AAEuswfDeMcymmu3ASdhvIWsTujKy2Rn8jA";
 const BACKUP_BOT_TOKEN = process.env.BACKUP_BOT_TOKEN || "7931381114:AAGt20pJlOH0bvTgQjqJCLf7JW-7gEhq5v8";
 const BACKUP_CHAT_ID = process.env.BACKUP_CHAT_ID || "5798607712";
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())) : [5798607712];
