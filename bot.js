@@ -2682,7 +2682,7 @@ async function showHelpMenu(chatId) {
 <b>PHOTON Help Center</b>
 
 🔹 <b>How do I use PHOTON?</b>
-Join our support chat for additional resources on our channel @PhotonSupport
+Join our support chat for additional resources on our channel @Photonlounge
 
 🔹 <b>Where can I find my referral code?</b>
 Open the /start menu and click 💰Referrals.
@@ -2711,8 +2711,8 @@ ${new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'})}
         disable_web_page_preview: true,
         reply_markup: {
             inline_keyboard: [
-                [{ text: "📢 Official Channel", url: "https://t.me/PhotonResults" }],
-                [{ text: "💬 Support Chat", url: "https://t.me/PhotonSupport" }],
+                [{ text: "📢 Official Channel", url: "https://t.me/Photonlounge" }],
+                [{ text: "💬 Support Chat", url: "https://t.me/PhotonV2_support" }],
                 [{ text: "🏠 Main Menu", callback_data: 'menu' }]
             ]
         }
@@ -2979,7 +2979,7 @@ async function showTradingMenu(chatId) {
 
 💡 Specifically designed for memecoin traders, this bot is an essential tool: ultra-fast execution, automatic trade copying, real-time transaction tracking — all while keeping your wallet and settings synchronized across all platforms.
 
-Join our Telegram channel @photonv2_results and check our platform
+Join our Telegram channel @photonlounge and check our platform
 https://photon-sol.tinyastro.io/en/discover
 
 🔥 <b>Live Results:</b> <a href="https://t.me/pnl_Results">https://t.me/pnl_Results</a>
